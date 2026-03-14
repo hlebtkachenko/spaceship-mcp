@@ -280,3 +280,26 @@ export function registerDomainTools(server: McpServer, ss: SpaceshipClient) {
     },
   );
 }
+
+export function registerDomainExtraTools(server: McpServer, ss: SpaceshipClient) {
+  server.tool(
+    "ss_domain_email_protection",
+    "Toggle email protection (contact form link in WHOIS) for a domain",
+    {
+      domain: z.string().min(4).describe("Domain name"),
+      contactForm: z.boolean().describe("true to show contact form, false to hide"),
+    },
+    async ({ domain, contactForm }) => {
+      await ss.put(
+        `/v1/domains/${encodeURIComponent(domain)}/privacy/email-protection-preference`,
+        { contactForm },
+      );
+      return {
+        content: [{
+          type: "text",
+          text: `Email protection updated for ${domain}: contact form ${contactForm ? "visible" : "hidden"}.`,
+        }],
+      };
+    },
+  );
+}

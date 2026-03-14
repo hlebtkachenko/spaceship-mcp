@@ -66,3 +66,41 @@ export function registerContactTools(server: McpServer, ss: SpaceshipClient) {
     },
   );
 }
+
+export function registerContactAttributeTools(server: McpServer, ss: SpaceshipClient) {
+  server.tool(
+    "ss_contact_attr_save",
+    "Save TLD-specific contact attributes (e.g. .ca requires language and CIRA category)",
+    {
+      type: z.string().min(2).max(32).describe("Attribute type (e.g. 'ca' for .ca domains)"),
+      agreementValue: z.boolean().describe("Agree to registry rules"),
+      language: z.enum(["EN", "FR"]).describe("Language code"),
+      registrantCiraCategory: z.string().optional().describe("CIRA registrant category (for .ca)"),
+    },
+    async (params) => {
+      const data = await ss.put<{ contactId: string }>("/v1/contacts/attributes", params);
+      return {
+        content: [{
+          type: "text",
+          text: `Contact attributes saved. ID: **${data.contactId}**`,
+        }],
+      };
+    },
+  );
+
+  server.tool(
+    "ss_contact_attr_get",
+    "Read TLD-specific contact attributes by contact ID",
+    { contactId: z.string().min(27).max(32).describe("Contact ID") },
+    async ({ contactId }) => {
+      const data = await ss.get<Record<string, unknown>>(
+        `/v1/contacts/attributes/${encodeURIComponent(contactId)}`,
+      );
+      const lines = [`# Contact Attributes ${contactId}`, ""];
+      for (const [k, v] of Object.entries(data)) {
+        lines.push(`- ${k}: ${v}`);
+      }
+      return { content: [{ type: "text", text: lines.join("\n") }] };
+    },
+  );
+}
