@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { SpaceshipClient } from "../spaceship-client.js";
+import { textResult, errorResult } from "../utils.js";
 
 interface PersonalNs {
   host: string;
@@ -13,17 +14,21 @@ export function registerNameserverTools(server: McpServer, ss: SpaceshipClient) 
     "List personal (vanity/glue) nameservers for a domain",
     { domain: z.string().min(4).describe("Domain name") },
     async ({ domain }) => {
-      const data = await ss.get<{ records: PersonalNs[] }>(
-        `/v1/domains/${encodeURIComponent(domain)}/personal-nameservers`,
-      );
-      if (!data?.records?.length) {
-        return { content: [{ type: "text", text: `No personal nameservers for ${domain}.` }] };
+      try {
+        const data = await ss.get<{ records: PersonalNs[] }>(
+          `/v1/domains/${encodeURIComponent(domain)}/personal-nameservers`,
+        );
+        if (!data?.records?.length) {
+          return textResult(`No personal nameservers for ${domain}.`);
+        }
+        const lines = [`# Personal Nameservers for ${domain}`, ""];
+        for (const ns of data.records) {
+          lines.push(`- **${ns.host}.${domain}** → ${ns.ips.join(", ")}`);
+        }
+        return textResult(lines.join("\n"));
+      } catch (err) {
+        return errorResult((err as Error).message);
       }
-      const lines = [`# Personal Nameservers for ${domain}`, ""];
-      for (const ns of data.records) {
-        lines.push(`- **${ns.host}.${domain}** → ${ns.ips.join(", ")}`);
-      }
-      return { content: [{ type: "text", text: lines.join("\n") }] };
     },
   );
 
@@ -35,15 +40,14 @@ export function registerNameserverTools(server: McpServer, ss: SpaceshipClient) 
       host: z.string().min(1).describe("Host name (e.g. ns1)"),
     },
     async ({ domain, host }) => {
-      const data = await ss.get<{ ips: string[] }>(
-        `/v1/domains/${encodeURIComponent(domain)}/personal-nameservers/${encodeURIComponent(host)}`,
-      );
-      return {
-        content: [{
-          type: "text",
-          text: `**${host}.${domain}** → ${data.ips?.join(", ") || "no IPs"}`,
-        }],
-      };
+      try {
+        const data = await ss.get<{ ips: string[] }>(
+          `/v1/domains/${encodeURIComponent(domain)}/personal-nameservers/${encodeURIComponent(host)}`,
+        );
+        return textResult(`**${host}.${domain}** → ${data.ips?.join(", ") || "no IPs"}`);
+      } catch (err) {
+        return errorResult((err as Error).message);
+      }
     },
   );
 
@@ -57,16 +61,15 @@ export function registerNameserverTools(server: McpServer, ss: SpaceshipClient) 
       ips: z.array(z.string()).min(1).max(16).describe("IP addresses for this nameserver"),
     },
     async ({ domain, currentHost, host, ips }) => {
-      await ss.put(
-        `/v1/domains/${encodeURIComponent(domain)}/personal-nameservers/${encodeURIComponent(currentHost)}`,
-        { host, ips },
-      );
-      return {
-        content: [{
-          type: "text",
-          text: `Personal nameserver updated: ${host}.${domain} → ${ips.join(", ")}`,
-        }],
-      };
+      try {
+        await ss.put(
+          `/v1/domains/${encodeURIComponent(domain)}/personal-nameservers/${encodeURIComponent(currentHost)}`,
+          { host, ips },
+        );
+        return textResult(`Personal nameserver updated: ${host}.${domain} → ${ips.join(", ")}`);
+      } catch (err) {
+        return errorResult((err as Error).message);
+      }
     },
   );
 
@@ -78,12 +81,14 @@ export function registerNameserverTools(server: McpServer, ss: SpaceshipClient) 
       host: z.string().min(1).describe("Host name to delete (e.g. ns1)"),
     },
     async ({ domain, host }) => {
-      await ss.del(
-        `/v1/domains/${encodeURIComponent(domain)}/personal-nameservers/${encodeURIComponent(host)}`,
-      );
-      return {
-        content: [{ type: "text", text: `Deleted personal nameserver ${host}.${domain}.` }],
-      };
+      try {
+        await ss.del(
+          `/v1/domains/${encodeURIComponent(domain)}/personal-nameservers/${encodeURIComponent(host)}`,
+        );
+        return textResult(`Deleted personal nameserver ${host}.${domain}.`);
+      } catch (err) {
+        return errorResult((err as Error).message);
+      }
     },
   );
 }

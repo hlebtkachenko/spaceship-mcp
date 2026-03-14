@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { SpaceshipClient } from "../spaceship-client.js";
+import { textResult, errorResult } from "../utils.js";
 
 interface DomainItem {
   name: string;
@@ -39,28 +40,32 @@ export function registerDomainTools(server: McpServer, ss: SpaceshipClient) {
       skip: z.number().int().min(0).default(0).describe("Items to skip"),
     },
     async ({ take, skip }) => {
-      const data = await ss.get<DomainList>("/v1/domains", {
-        take: String(take),
-        skip: String(skip),
-      });
+      try {
+        const data = await ss.get<DomainList>("/v1/domains", {
+          take: String(take),
+          skip: String(skip),
+        });
 
-      if (!data?.items?.length) {
-        return { content: [{ type: "text", text: "No domains found." }] };
-      }
+        if (!data?.items?.length) {
+          return textResult("No domains found.");
+        }
 
-      const lines = [`# Domains (${data.items.length} of ${data.total})`, ""];
-      for (const d of data.items) {
-        const name = d.unicodeName || d.name;
-        const status = d.lifecycleStatus || "unknown";
-        const exp = fmtDate(d.expirationDate);
-        const ar = d.autoRenew ? "auto-renew" : "manual";
-        const ns = d.nameservers?.provider || "";
-        lines.push(`- **${name}** [${status}] expires: ${exp} (${ar}, ns: ${ns})`);
+        const lines = [`# Domains (${data.items.length} of ${data.total})`, ""];
+        for (const d of data.items) {
+          const name = d.unicodeName || d.name;
+          const status = d.lifecycleStatus || "unknown";
+          const exp = fmtDate(d.expirationDate);
+          const ar = d.autoRenew ? "auto-renew" : "manual";
+          const ns = d.nameservers?.provider || "";
+          lines.push(`- **${name}** [${status}] expires: ${exp} (${ar}, ns: ${ns})`);
+        }
+        if (data.total > skip + take) {
+          lines.push("", `Use skip=${skip + take} to see more.`);
+        }
+        return textResult(lines.join("\n"));
+      } catch (err) {
+        return errorResult((err as Error).message);
       }
-      if (data.total > skip + take) {
-        lines.push("", `Use skip=${skip + take} to see more.`);
-      }
-      return { content: [{ type: "text", text: lines.join("\n") }] };
     },
   );
 
@@ -69,22 +74,26 @@ export function registerDomainTools(server: McpServer, ss: SpaceshipClient) {
     "Get detailed info for a specific domain",
     { domain: z.string().min(4).describe("Domain name (e.g. example.com)") },
     async ({ domain }) => {
-      const d = await ss.get<DomainItem>(`/v1/domains/${encodeURIComponent(domain)}`);
-      const lines = [
-        `# ${d.unicodeName || d.name}`,
-        `- Status: ${d.lifecycleStatus || "unknown"}`,
-        `- Registered: ${fmtDate(d.registrationDate)}`,
-        `- Expires: ${fmtDate(d.expirationDate)}`,
-        `- Auto-renew: ${d.autoRenew}`,
-        `- Verification: ${d.verificationStatus || "n/a"}`,
-      ];
-      if (d.nameservers) {
-        lines.push(`- Nameservers: ${d.nameservers.provider} ${d.nameservers.hosts?.join(", ") || ""}`);
+      try {
+        const d = await ss.get<DomainItem>(`/v1/domains/${encodeURIComponent(domain)}`);
+        const lines = [
+          `# ${d.unicodeName || d.name}`,
+          `- Status: ${d.lifecycleStatus || "unknown"}`,
+          `- Registered: ${fmtDate(d.registrationDate)}`,
+          `- Expires: ${fmtDate(d.expirationDate)}`,
+          `- Auto-renew: ${d.autoRenew}`,
+          `- Verification: ${d.verificationStatus || "n/a"}`,
+        ];
+        if (d.nameservers) {
+          lines.push(`- Nameservers: ${d.nameservers.provider} ${d.nameservers.hosts?.join(", ") || ""}`);
+        }
+        if (d.privacyProtection) {
+          lines.push(`- Privacy: ${d.privacyProtection.level} (contact form: ${d.privacyProtection.contactForm})`);
+        }
+        return textResult(lines.join("\n"));
+      } catch (err) {
+        return errorResult((err as Error).message);
       }
-      if (d.privacyProtection) {
-        lines.push(`- Privacy: ${d.privacyProtection.level} (contact form: ${d.privacyProtection.contactForm})`);
-      }
-      return { content: [{ type: "text", text: lines.join("\n") }] };
     },
   );
 
@@ -93,16 +102,20 @@ export function registerDomainTools(server: McpServer, ss: SpaceshipClient) {
     "Check if a single domain is available for registration",
     { domain: z.string().min(4).describe("Domain to check (e.g. example.com)") },
     async ({ domain }) => {
-      const data = await ss.get<AvailabilityResult>(
-        `/v1/domains/${encodeURIComponent(domain)}/available`,
-      );
-      const lines = [`# ${data.domain}`, `- Result: **${data.result}**`];
-      if (data.premiumPricing?.length) {
-        for (const p of data.premiumPricing) {
-          lines.push(`- ${p.operation}: ${p.price} ${p.currency}`);
+      try {
+        const data = await ss.get<AvailabilityResult>(
+          `/v1/domains/${encodeURIComponent(domain)}/available`,
+        );
+        const lines = [`# ${data.domain}`, `- Result: **${data.result}**`];
+        if (data.premiumPricing?.length) {
+          for (const p of data.premiumPricing) {
+            lines.push(`- ${p.operation}: ${p.price} ${p.currency}`);
+          }
         }
+        return textResult(lines.join("\n"));
+      } catch (err) {
+        return errorResult((err as Error).message);
       }
-      return { content: [{ type: "text", text: lines.join("\n") }] };
     },
   );
 
@@ -113,19 +126,23 @@ export function registerDomainTools(server: McpServer, ss: SpaceshipClient) {
       domains: z.array(z.string().min(4)).min(1).max(20).describe("Domains to check"),
     },
     async ({ domains }) => {
-      const data = await ss.post<{ domains: AvailabilityResult[] }>(
-        "/v1/domains/available",
-        { domains },
-      );
-      const lines = [`# Availability Check (${data.domains.length} domains)`, ""];
-      for (const d of data.domains) {
-        let extra = "";
-        if (d.premiumPricing?.length) {
-          extra = ` — ${d.premiumPricing.map((p) => `${p.operation}: ${p.price} ${p.currency}`).join(", ")}`;
+      try {
+        const data = await ss.post<{ domains: AvailabilityResult[] }>(
+          "/v1/domains/available",
+          { domains },
+        );
+        const lines = [`# Availability Check (${data.domains.length} domains)`, ""];
+        for (const d of data.domains) {
+          let extra = "";
+          if (d.premiumPricing?.length) {
+            extra = ` — ${d.premiumPricing.map((p) => `${p.operation}: ${p.price} ${p.currency}`).join(", ")}`;
+          }
+          lines.push(`- **${d.domain}**: ${d.result}${extra}`);
         }
-        lines.push(`- **${d.domain}**: ${d.result}${extra}`);
+        return textResult(lines.join("\n"));
+      } catch (err) {
+        return errorResult((err as Error).message);
       }
-      return { content: [{ type: "text", text: lines.join("\n") }] };
     },
   );
 
@@ -143,24 +160,25 @@ export function registerDomainTools(server: McpServer, ss: SpaceshipClient) {
       billing: z.string().describe("Billing contact ID"),
     },
     async ({ domain, years, autoRenew, privacyLevel, registrant, admin, tech, billing }) => {
-      const result = await ss.post<{ asyncOperationId?: string }>(
-        `/v1/domains/${encodeURIComponent(domain)}`,
-        {
-          autoRenew,
-          years,
-          privacyProtection: { level: privacyLevel, userConsent: true },
-          contacts: { registrant, admin, tech, billing },
-        },
-      );
-      const opId = result?.asyncOperationId;
-      return {
-        content: [{
-          type: "text",
-          text: opId
+      try {
+        const result = await ss.post<{ asyncOperationId?: string }>(
+          `/v1/domains/${encodeURIComponent(domain)}`,
+          {
+            autoRenew,
+            years,
+            privacyProtection: { level: privacyLevel, userConsent: true },
+            contacts: { registrant, admin, tech, billing },
+          },
+        );
+        const opId = result?.asyncOperationId;
+        return textResult(
+          opId
             ? `Domain registration initiated. Operation ID: ${opId}\nUse ss_async_status to track progress.`
             : `Domain registration request sent for ${domain}.`,
-        }],
-      };
+        );
+      } catch (err) {
+        return errorResult((err as Error).message);
+      }
     },
   );
 
@@ -173,19 +191,20 @@ export function registerDomainTools(server: McpServer, ss: SpaceshipClient) {
       currentExpirationDate: z.string().describe("Current expiration date (ISO format)"),
     },
     async ({ domain, years, currentExpirationDate }) => {
-      const result = await ss.post<{ asyncOperationId?: string }>(
-        `/v1/domains/${encodeURIComponent(domain)}/renew`,
-        { years, currentExpirationDate },
-      );
-      const opId = result?.asyncOperationId;
-      return {
-        content: [{
-          type: "text",
-          text: opId
+      try {
+        const result = await ss.post<{ asyncOperationId?: string }>(
+          `/v1/domains/${encodeURIComponent(domain)}/renew`,
+          { years, currentExpirationDate },
+        );
+        const opId = result?.asyncOperationId;
+        return textResult(
+          opId
             ? `Renewal initiated. Operation ID: ${opId}`
             : `Renewal request sent for ${domain}.`,
-        }],
-      };
+        );
+      } catch (err) {
+        return errorResult((err as Error).message);
+      }
     },
   );
 
@@ -197,12 +216,14 @@ export function registerDomainTools(server: McpServer, ss: SpaceshipClient) {
       enabled: z.boolean().describe("true to enable, false to disable"),
     },
     async ({ domain, enabled }) => {
-      await ss.put(`/v1/domains/${encodeURIComponent(domain)}/autorenew`, {
-        isEnabled: enabled,
-      });
-      return {
-        content: [{ type: "text", text: `Auto-renewal ${enabled ? "enabled" : "disabled"} for ${domain}.` }],
-      };
+      try {
+        await ss.put(`/v1/domains/${encodeURIComponent(domain)}/autorenew`, {
+          isEnabled: enabled,
+        });
+        return textResult(`Auto-renewal ${enabled ? "enabled" : "disabled"} for ${domain}.`);
+      } catch (err) {
+        return errorResult((err as Error).message);
+      }
     },
   );
 
@@ -215,15 +236,14 @@ export function registerDomainTools(server: McpServer, ss: SpaceshipClient) {
       hosts: z.array(z.string()).min(2).max(12).optional().describe("Nameserver hostnames (required for custom)"),
     },
     async ({ domain, provider, hosts }) => {
-      const body: Record<string, unknown> = { provider };
-      if (provider === "custom" && hosts) body.hosts = hosts;
-      await ss.put(`/v1/domains/${encodeURIComponent(domain)}/nameservers`, body);
-      return {
-        content: [{
-          type: "text",
-          text: `Nameservers updated for ${domain}: ${provider}${hosts ? " → " + hosts.join(", ") : ""}`,
-        }],
-      };
+      try {
+        const body: Record<string, unknown> = { provider };
+        if (provider === "custom" && hosts) body.hosts = hosts;
+        await ss.put(`/v1/domains/${encodeURIComponent(domain)}/nameservers`, body);
+        return textResult(`Nameservers updated for ${domain}: ${provider}${hosts ? " → " + hosts.join(", ") : ""}`);
+      } catch (err) {
+        return errorResult((err as Error).message);
+      }
     },
   );
 
@@ -238,12 +258,16 @@ export function registerDomainTools(server: McpServer, ss: SpaceshipClient) {
       billing: z.string().optional().describe("Billing contact ID"),
     },
     async ({ domain, registrant, admin, tech, billing }) => {
-      const body: Record<string, string> = { registrant };
-      if (admin) body.admin = admin;
-      if (tech) body.tech = tech;
-      if (billing) body.billing = billing;
-      await ss.put(`/v1/domains/${encodeURIComponent(domain)}/contacts`, body);
-      return { content: [{ type: "text", text: `Contacts updated for ${domain}.` }] };
+      try {
+        const body: Record<string, string> = { registrant };
+        if (admin) body.admin = admin;
+        if (tech) body.tech = tech;
+        if (billing) body.billing = billing;
+        await ss.put(`/v1/domains/${encodeURIComponent(domain)}/contacts`, body);
+        return textResult(`Contacts updated for ${domain}.`);
+      } catch (err) {
+        return errorResult((err as Error).message);
+      }
     },
   );
 
@@ -255,11 +279,15 @@ export function registerDomainTools(server: McpServer, ss: SpaceshipClient) {
       level: z.enum(["public", "high"]).describe("Privacy level"),
     },
     async ({ domain, level }) => {
-      await ss.put(`/v1/domains/${encodeURIComponent(domain)}/privacy/preference`, {
-        privacyLevel: level,
-        userConsent: true,
-      });
-      return { content: [{ type: "text", text: `Privacy set to "${level}" for ${domain}.` }] };
+      try {
+        await ss.put(`/v1/domains/${encodeURIComponent(domain)}/privacy/preference`, {
+          privacyLevel: level,
+          userConsent: true,
+        });
+        return textResult(`Privacy set to "${level}" for ${domain}.`);
+      } catch (err) {
+        return errorResult((err as Error).message);
+      }
     },
   );
 
@@ -271,12 +299,14 @@ export function registerDomainTools(server: McpServer, ss: SpaceshipClient) {
       locked: z.boolean().describe("true to lock, false to unlock"),
     },
     async ({ domain, locked }) => {
-      await ss.put(`/v1/domains/${encodeURIComponent(domain)}/transfer/lock`, {
-        isLocked: locked,
-      });
-      return {
-        content: [{ type: "text", text: `Transfer ${locked ? "locked" : "unlocked"} for ${domain}.` }],
-      };
+      try {
+        await ss.put(`/v1/domains/${encodeURIComponent(domain)}/transfer/lock`, {
+          isLocked: locked,
+        });
+        return textResult(`Transfer ${locked ? "locked" : "unlocked"} for ${domain}.`);
+      } catch (err) {
+        return errorResult((err as Error).message);
+      }
     },
   );
 }
@@ -290,16 +320,15 @@ export function registerDomainExtraTools(server: McpServer, ss: SpaceshipClient)
       contactForm: z.boolean().describe("true to show contact form, false to hide"),
     },
     async ({ domain, contactForm }) => {
-      await ss.put(
-        `/v1/domains/${encodeURIComponent(domain)}/privacy/email-protection-preference`,
-        { contactForm },
-      );
-      return {
-        content: [{
-          type: "text",
-          text: `Email protection updated for ${domain}: contact form ${contactForm ? "visible" : "hidden"}.`,
-        }],
-      };
+      try {
+        await ss.put(
+          `/v1/domains/${encodeURIComponent(domain)}/privacy/email-protection-preference`,
+          { contactForm },
+        );
+        return textResult(`Email protection updated for ${domain}: contact form ${contactForm ? "visible" : "hidden"}.`);
+      } catch (err) {
+        return errorResult((err as Error).message);
+      }
     },
   );
 }

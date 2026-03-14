@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { SpaceshipClient } from "../spaceship-client.js";
+import { textResult, errorResult } from "../utils.js";
 
 interface ContactDetails {
   firstName: string;
@@ -34,13 +35,12 @@ export function registerContactTools(server: McpServer, ss: SpaceshipClient) {
       postalCode: z.string().max(16).optional().describe("Postal code"),
     },
     async (params) => {
-      const data = await ss.put<{ contactId: string }>("/v1/contacts", params);
-      return {
-        content: [{
-          type: "text",
-          text: `Contact saved. ID: **${data.contactId}**\nUse this ID when registering or updating domains.`,
-        }],
-      };
+      try {
+        const data = await ss.put<{ contactId: string }>("/v1/contacts", params);
+        return textResult(`Contact saved. ID: **${data.contactId}**\nUse this ID when registering or updating domains.`);
+      } catch (err) {
+        return errorResult((err as Error).message);
+      }
     },
   );
 
@@ -49,20 +49,24 @@ export function registerContactTools(server: McpServer, ss: SpaceshipClient) {
     "Read contact details by contact ID",
     { contactId: z.string().min(27).max(32).describe("Contact ID") },
     async ({ contactId }) => {
-      const c = await ss.get<ContactDetails>(`/v1/contacts/${encodeURIComponent(contactId)}`);
-      const lines = [
-        `# Contact ${contactId}`,
-        `- Name: ${c.firstName} ${c.lastName}`,
-        `- Email: ${c.email}`,
-        `- Phone: ${c.phone}`,
-        `- Address: ${c.address1}${c.address2 ? ", " + c.address2 : ""}`,
-        `- City: ${c.city}`,
-        `- Country: ${c.country}`,
-      ];
-      if (c.organization) lines.push(`- Organization: ${c.organization}`);
-      if (c.stateProvince) lines.push(`- State: ${c.stateProvince}`);
-      if (c.postalCode) lines.push(`- Postal code: ${c.postalCode}`);
-      return { content: [{ type: "text", text: lines.join("\n") }] };
+      try {
+        const c = await ss.get<ContactDetails>(`/v1/contacts/${encodeURIComponent(contactId)}`);
+        const lines = [
+          `# Contact ${contactId}`,
+          `- Name: ${c.firstName} ${c.lastName}`,
+          `- Email: ${c.email}`,
+          `- Phone: ${c.phone}`,
+          `- Address: ${c.address1}${c.address2 ? ", " + c.address2 : ""}`,
+          `- City: ${c.city}`,
+          `- Country: ${c.country}`,
+        ];
+        if (c.organization) lines.push(`- Organization: ${c.organization}`);
+        if (c.stateProvince) lines.push(`- State: ${c.stateProvince}`);
+        if (c.postalCode) lines.push(`- Postal code: ${c.postalCode}`);
+        return textResult(lines.join("\n"));
+      } catch (err) {
+        return errorResult((err as Error).message);
+      }
     },
   );
 }
@@ -78,13 +82,12 @@ export function registerContactAttributeTools(server: McpServer, ss: SpaceshipCl
       registrantCiraCategory: z.string().optional().describe("CIRA registrant category (for .ca)"),
     },
     async (params) => {
-      const data = await ss.put<{ contactId: string }>("/v1/contacts/attributes", params);
-      return {
-        content: [{
-          type: "text",
-          text: `Contact attributes saved. ID: **${data.contactId}**`,
-        }],
-      };
+      try {
+        const data = await ss.put<{ contactId: string }>("/v1/contacts/attributes", params);
+        return textResult(`Contact attributes saved. ID: **${data.contactId}**`);
+      } catch (err) {
+        return errorResult((err as Error).message);
+      }
     },
   );
 
@@ -93,14 +96,18 @@ export function registerContactAttributeTools(server: McpServer, ss: SpaceshipCl
     "Read TLD-specific contact attributes by contact ID",
     { contactId: z.string().min(27).max(32).describe("Contact ID") },
     async ({ contactId }) => {
-      const data = await ss.get<Record<string, unknown>>(
-        `/v1/contacts/attributes/${encodeURIComponent(contactId)}`,
-      );
-      const lines = [`# Contact Attributes ${contactId}`, ""];
-      for (const [k, v] of Object.entries(data)) {
-        lines.push(`- ${k}: ${v}`);
+      try {
+        const data = await ss.get<Record<string, unknown>>(
+          `/v1/contacts/attributes/${encodeURIComponent(contactId)}`,
+        );
+        const lines = [`# Contact Attributes ${contactId}`, ""];
+        for (const [k, v] of Object.entries(data)) {
+          lines.push(`- ${k}: ${v}`);
+        }
+        return textResult(lines.join("\n"));
+      } catch (err) {
+        return errorResult((err as Error).message);
       }
-      return { content: [{ type: "text", text: lines.join("\n") }] };
     },
   );
 }

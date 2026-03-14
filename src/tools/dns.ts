@@ -1,24 +1,8 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { SpaceshipClient } from "../spaceship-client.js";
-
-interface DnsRecord {
-  type: string;
-  name: string;
-  ttl?: number;
-  address?: string;
-  value?: string;
-  priority?: number;
-  weight?: number;
-  port?: number;
-  target?: string;
-  group?: { type: string };
-}
-
-interface DnsRecordList {
-  items: DnsRecord[];
-  total: number;
-}
+import type { DnsRecord, DnsRecordList } from "../types.js";
+import { textResult, errorResult } from "../utils.js";
 
 const RECORD_TYPE = z.enum([
   "A", "AAAA", "ALIAS", "CAA", "CNAME", "HTTPS", "MX", "NS", "PTR", "SRV", "SVCB", "TLSA", "TXT",
@@ -45,21 +29,25 @@ export function registerDnsTools(server: McpServer, ss: SpaceshipClient) {
       skip: z.number().int().min(0).default(0).describe("Items to skip"),
     },
     async ({ domain, take, skip }) => {
-      const data = await ss.get<DnsRecordList>(
-        `/v1/dns/records/${encodeURIComponent(domain)}`,
-        { take: String(take), skip: String(skip) },
-      );
+      try {
+        const data = await ss.get<DnsRecordList>(
+          `/v1/dns/records/${encodeURIComponent(domain)}`,
+          { take: String(take), skip: String(skip) },
+        );
 
-      if (!data?.items?.length) {
-        return { content: [{ type: "text", text: `No DNS records for ${domain}.` }] };
-      }
+        if (!data?.items?.length) {
+          return textResult(`No DNS records for ${domain}.`);
+        }
 
-      const lines = [`# DNS Records for ${domain} (${data.items.length} of ${data.total})`, ""];
-      for (const r of data.items) lines.push(fmtRecord(r));
-      if (data.total > skip + take) {
-        lines.push("", `Use skip=${skip + take} to see more.`);
+        const lines = [`# DNS Records for ${domain} (${data.items.length} of ${data.total})`, ""];
+        for (const r of data.items) lines.push(fmtRecord(r));
+        if (data.total > skip + take) {
+          lines.push("", `Use skip=${skip + take} to see more.`);
+        }
+        return textResult(lines.join("\n"));
+      } catch (err) {
+        return errorResult((err as Error).message);
       }
-      return { content: [{ type: "text", text: lines.join("\n") }] };
     },
   );
 
@@ -78,16 +66,15 @@ export function registerDnsTools(server: McpServer, ss: SpaceshipClient) {
       force: z.boolean().default(false).describe("Force update (skip conflict check)"),
     },
     async ({ domain, records, force }) => {
-      await ss.put(`/v1/dns/records/${encodeURIComponent(domain)}`, {
-        force,
-        items: records,
-      });
-      return {
-        content: [{
-          type: "text",
-          text: `Saved ${records.length} DNS record(s) for ${domain}.`,
-        }],
-      };
+      try {
+        await ss.put(`/v1/dns/records/${encodeURIComponent(domain)}`, {
+          force,
+          items: records,
+        });
+        return textResult(`Saved ${records.length} DNS record(s) for ${domain}.`);
+      } catch (err) {
+        return errorResult((err as Error).message);
+      }
     },
   );
 
@@ -103,13 +90,12 @@ export function registerDnsTools(server: McpServer, ss: SpaceshipClient) {
       })).min(1).max(500).describe("Records to delete (must match exactly)"),
     },
     async ({ domain, records }) => {
-      await ss.del(`/v1/dns/records/${encodeURIComponent(domain)}`, records);
-      return {
-        content: [{
-          type: "text",
-          text: `Deleted ${records.length} DNS record(s) from ${domain}.`,
-        }],
-      };
+      try {
+        await ss.del(`/v1/dns/records/${encodeURIComponent(domain)}`, records);
+        return textResult(`Deleted ${records.length} DNS record(s) from ${domain}.`);
+      } catch (err) {
+        return errorResult((err as Error).message);
+      }
     },
   );
 }

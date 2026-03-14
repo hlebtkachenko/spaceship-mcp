@@ -13,6 +13,10 @@ const RECOVERY_HINTS: Record<number, string> = {
   500: "Spaceship internal error. Try again in a few seconds.",
 };
 
+export interface AsyncOperationResult {
+  asyncOperationId: string;
+}
+
 export interface SpaceshipConfig {
   apiKey: string;
   apiSecret: string;
@@ -113,21 +117,27 @@ export class SpaceshipClient {
           );
         }
 
+        // Async operations return 202 with an operation ID header.
+        // Callers expecting this should use T = AsyncOperationResult.
         const asyncOpId = res.headers.get("spaceship-async-operationid");
         if (res.status === 202 && asyncOpId) {
-          return { asyncOperationId: asyncOpId } as T;
+          return { asyncOperationId: asyncOpId } as unknown as T;
         }
 
+        // 204 No Content or empty body — callers should handle undefined via
+        // T that includes undefined (e.g. void) or optional chaining.
         if (res.status === 204 || !text) {
           if (upperMethod !== "GET") this.invalidateRelated(path);
-          return undefined as T;
+          return undefined as unknown as T;
         }
 
         let parsed: T;
         try {
           parsed = JSON.parse(text) as T;
         } catch {
-          parsed = text as T;
+          throw new Error(
+            `Spaceship ${upperMethod} ${path}: expected JSON response but got: ${text.slice(0, 200)}`,
+          );
         }
 
         if (upperMethod === "GET" && this.cache.enabled) {

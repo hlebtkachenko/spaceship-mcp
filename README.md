@@ -1,5 +1,9 @@
 # Spaceship MCP Server
 
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
+![Node.js Version](https://img.shields.io/badge/node-%3E%3D20-brightgreen)
+![TypeScript](https://img.shields.io/badge/TypeScript-5-blue)
+
 MCP server for [Spaceship](https://www.spaceship.com) (by Namecheap) — domain registrar with DNS management, WHOIS privacy, domain transfers, and a built-in SellerHub marketplace. Manage everything from any MCP-compatible client.
 
 35 tools across 9 categories. Built-in response caching, rate limit handling with exponential backoff, and actionable error messages.

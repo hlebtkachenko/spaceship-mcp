@@ -5,6 +5,19 @@
   "type": "module",
   "main": "dist/index.js",
   "license": "MIT",
+  "author": "Hleb Tkachenko",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hlebtkachenko/spaceship-mcp.git"
+  },
+  "homepage": "https://github.com/hlebtkachenko/spaceship-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/hlebtkachenko/spaceship-mcp/issues"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": ["mcp", "mcp-server", "spaceship", "domains", "dns", "typescript"],
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js"

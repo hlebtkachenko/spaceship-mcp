@@ -1,6 +1,9 @@
+import { readFileSync } from "fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { SpaceshipClient } from "./spaceship-client.js";
+
+const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf-8"));
 import { registerDomainTools, registerDomainExtraTools } from "./tools/domains.js";
 import { registerDnsTools } from "./tools/dns.js";
 import { registerContactTools, registerContactAttributeTools } from "./tools/contacts.js";
@@ -33,7 +36,7 @@ const client = new SpaceshipClient({
   maxRetries: optInt("SPACESHIP_MAX_RETRIES", 3),
 });
 
-const server = new McpServer({ name: "spaceship", version: "2.0.0" });
+const server = new McpServer({ name: "spaceship", version: pkg.version });
 
 registerDomainTools(server, client);
 registerDomainExtraTools(server, client);

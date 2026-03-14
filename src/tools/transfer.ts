@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { SpaceshipClient } from "../spaceship-client.js";
+import { textResult, errorResult } from "../utils.js";
 
 interface TransferDetails {
   startedAt?: string;
@@ -24,26 +25,27 @@ export function registerTransferTools(server: McpServer, ss: SpaceshipClient) {
       authCode: z.string().optional().describe("EPP/auth code (required for most TLDs)"),
     },
     async ({ domain, autoRenew, privacyLevel, registrant, admin, tech, billing, authCode }) => {
-      const body: Record<string, unknown> = {
-        autoRenew,
-        privacyProtection: { level: privacyLevel, userConsent: true },
-        contacts: { registrant, admin, tech, billing },
-      };
-      if (authCode) body.authCode = authCode;
+      try {
+        const body: Record<string, unknown> = {
+          autoRenew,
+          privacyProtection: { level: privacyLevel, userConsent: true },
+          contacts: { registrant, admin, tech, billing },
+        };
+        if (authCode) body.authCode = authCode;
 
-      const result = await ss.post<{ asyncOperationId?: string }>(
-        `/v1/domains/${encodeURIComponent(domain)}/transfer`,
-        body,
-      );
-      const opId = result?.asyncOperationId;
-      return {
-        content: [{
-          type: "text",
-          text: opId
+        const result = await ss.post<{ asyncOperationId?: string }>(
+          `/v1/domains/${encodeURIComponent(domain)}/transfer`,
+          body,
+        );
+        const opId = result?.asyncOperationId;
+        return textResult(
+          opId
             ? `Transfer initiated for ${domain}. Operation ID: ${opId}`
             : `Transfer request sent for ${domain}.`,
-        }],
-      };
+        );
+      } catch (err) {
+        return errorResult((err as Error).message);
+      }
     },
   );
 
@@ -52,17 +54,21 @@ export function registerTransferTools(server: McpServer, ss: SpaceshipClient) {
     "Get the status of an ongoing domain transfer",
     { domain: z.string().min(4).describe("Domain name") },
     async ({ domain }) => {
-      const t = await ss.get<TransferDetails>(
-        `/v1/domains/${encodeURIComponent(domain)}/transfer`,
-      );
-      const lines = [
-        `# Transfer: ${domain}`,
-        `- Direction: ${t.direction || "n/a"}`,
-        `- Status: **${t.status || "unknown"}**`,
-        `- Started: ${t.startedAt?.slice(0, 19) || "n/a"}`,
-        `- Finished: ${t.finishedAt?.slice(0, 19) || "n/a"}`,
-      ];
-      return { content: [{ type: "text", text: lines.join("\n") }] };
+      try {
+        const t = await ss.get<TransferDetails>(
+          `/v1/domains/${encodeURIComponent(domain)}/transfer`,
+        );
+        const lines = [
+          `# Transfer: ${domain}`,
+          `- Direction: ${t.direction || "n/a"}`,
+          `- Status: **${t.status || "unknown"}**`,
+          `- Started: ${t.startedAt?.slice(0, 19) || "n/a"}`,
+          `- Finished: ${t.finishedAt?.slice(0, 19) || "n/a"}`,
+        ];
+        return textResult(lines.join("\n"));
+      } catch (err) {
+        return errorResult((err as Error).message);
+      }
     },
   );
 
@@ -71,15 +77,14 @@ export function registerTransferTools(server: McpServer, ss: SpaceshipClient) {
     "Get the EPP/auth code for a domain (needed for outbound transfers)",
     { domain: z.string().min(4).describe("Domain name") },
     async ({ domain }) => {
-      const data = await ss.get<{ authCode: string; expires: string }>(
-        `/v1/domains/${encodeURIComponent(domain)}/transfer/auth-code`,
-      );
-      return {
-        content: [{
-          type: "text",
-          text: `Auth code for ${domain}: **${data.authCode}**\nExpires: ${data.expires?.slice(0, 19) || "n/a"}`,
-        }],
-      };
+      try {
+        const data = await ss.get<{ authCode: string; expires: string }>(
+          `/v1/domains/${encodeURIComponent(domain)}/transfer/auth-code`,
+        );
+        return textResult(`Auth code for ${domain}: **${data.authCode}**\nExpires: ${data.expires?.slice(0, 19) || "n/a"}`);
+      } catch (err) {
+        return errorResult((err as Error).message);
+      }
     },
   );
 
@@ -88,18 +93,19 @@ export function registerTransferTools(server: McpServer, ss: SpaceshipClient) {
     "Restore a deleted/expired domain (async operation)",
     { domain: z.string().min(4).describe("Domain to restore") },
     async ({ domain }) => {
-      const result = await ss.post<{ asyncOperationId?: string }>(
-        `/v1/domains/${encodeURIComponent(domain)}/restore`,
-      );
-      const opId = result?.asyncOperationId;
-      return {
-        content: [{
-          type: "text",
-          text: opId
+      try {
+        const result = await ss.post<{ asyncOperationId?: string }>(
+          `/v1/domains/${encodeURIComponent(domain)}/restore`,
+        );
+        const opId = result?.asyncOperationId;
+        return textResult(
+          opId
             ? `Restore initiated for ${domain}. Operation ID: ${opId}`
             : `Restore request sent for ${domain}.`,
-        }],
-      };
+        );
+      } catch (err) {
+        return errorResult((err as Error).message);
+      }
     },
   );
 }
