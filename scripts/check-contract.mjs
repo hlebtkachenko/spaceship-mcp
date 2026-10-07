@@ -1,4 +1,4 @@
-// Validates every request the tools send against Spaceship's OpenAPI spec.
+// Validates every request the tools send (and the fake API's canned responses) against Spaceship's OpenAPI spec.
 // Calls each tool with sample arguments (all fields, required fields only, one call per union branch)
 // against a fake API, then checks method + path exist and that path/query params and the JSON body
 // validate against the operation's schemas.
@@ -68,14 +68,28 @@ function expandDiscriminators(spec) {
   walk(spec.paths, false);
 }
 
+// OpenAPI 3.0 allows `nullable` next to allOf/$ref without `type`; ajv does not.
+function normalizeNullable(node) {
+  if (Array.isArray(node)) return node.forEach(normalizeNullable);
+  if (!node || typeof node !== "object") return;
+  for (const v of Object.values(node)) normalizeNullable(v);
+  if (node.nullable && !node.type) {
+    const rest = { ...node };
+    delete rest.nullable;
+    for (const k of Object.keys(node)) delete node[k];
+    node.anyOf = [rest, { type: "null" }];
+  }
+}
+
 const spec = await loadSpec();
 expandDiscriminators(spec);
+normalizeNullable(spec);
 
 const ajv = new Ajv({ strict: false, unicodeRegExp: false, allErrors: true, validateSchema: false });
 addFormats(ajv);
 ajv.addFormat("domain", /^(?=.{4,255}$)([a-z0-9-]+\.)+[a-z0-9-]{2,}$/i);
 ajv.addFormat("ip", (v) => net.isIP(v) !== 0);
-for (const f of ["uint16", "taxNumber"]) ajv.addFormat(f, true);
+for (const f of ["uint16", "taxNumber", "decimal"]) ajv.addFormat(f, true);
 ajv.addSchema(spec, "spec.json");
 const prefixRefs = (s) => JSON.parse(JSON.stringify(s).replaceAll('"$ref":"#/', '"$ref":"spec.json#/'));
 
@@ -126,6 +140,22 @@ function checkRequest(req) {
     }
   } else if (req.body !== undefined) {
     errors.push("operation takes no request body");
+  }
+  // The fake API's canned response must match the spec too, so tests cannot rely on made-up shapes.
+  if (req.response) {
+    const status = String(req.response.status ?? 200);
+    const spec = o.op.responses?.[status];
+    if (!spec) errors.push(`fake response status ${status} is not documented`);
+    else {
+      const schema = spec.content?.["application/json"]?.schema;
+      if (schema && req.response.body !== undefined) {
+        const validate = ajv.compile(prefixRefs(schema));
+        if (!validate(req.response.body)) errors.push(...validate.errors.map((e) => `fake response${e.instancePath} ${e.message}`));
+      } else if (schema) errors.push(`fake response ${status} has no body`);
+      for (const [h, d] of Object.entries(spec.headers ?? {})) {
+        if (d.required && !(h in (req.response.headers ?? {}))) errors.push(`fake response lacks header ${h}`);
+      }
+    }
   }
   return errors.length ? errors.map((e) => `${o.method} ${o.path}: ${e}`) : [];
 }
@@ -184,6 +214,9 @@ function samples(schema, key, mode, recordType) {
 // Self-test: the discriminator expansion must reject an MX record without exchange/preference.
 if (!checkRequest({ method: "PUT", path: "/v1/dns/records/example.com", query: {}, body: { items: [{ type: "MX", name: "@", address: "mail.example.com" }] } }).length) {
   throw new Error("contract check self-test failed: per-type record fields are not validated");
+}
+if (!checkRequest({ method: "GET", path: "/v1/domains/example.com", query: {}, response: { body: { name: "example.com" } } }).length) {
+  throw new Error("contract check self-test failed: fake responses are not validated");
 }
 
 const api = await fakeApi();

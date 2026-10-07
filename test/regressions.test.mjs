@@ -3,7 +3,9 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { fakeApi, startMcp, CONTACT, text } from "./helpers.mjs";
-import { SpaceshipClient } from "../dist/spaceship-client.js";
+import * as clientModule from "../dist/spaceship-client.js";
+
+const { SpaceshipClient } = clientModule;
 
 let api;
 let mcp;
@@ -204,4 +206,54 @@ test("failed async operation is reported as an error", async () => {
   api.handler = () => ({ body: { status: "failed", type: "domains_Create", createdAt: "2026-01-15T00:00:00Z", details: { reason: "synthetic" } } });
   const r = await mcp.call("ss_async_status", { operationId: "op1" });
   assert.ok(r.isError);
+});
+
+test("follow-up 1: domain info shows the full expiration date-time needed by ss_domain_renew", async () => {
+  api.reset();
+  api.handler = () => ({ body: { name: D, autoRenew: true, expirationDate: "2027-01-15T10:20:30.123Z" } });
+  const r = await mcp.call("ss_domain_info", { domain: D });
+  assert.match(text(r), /2027-01-15T10:20:30\.123Z/);
+});
+
+test("follow-up 2: a network error on POST reports an unknown outcome", async () => {
+  api.reset();
+  api.handler = () => "drop";
+  const client = new SpaceshipClient({ apiKey: "k", apiSecret: "s", baseUrl: api.url, maxRetries: 2, cacheTtl: 0 });
+  await assert.rejects(client.post(`/v1/domains/${D}/renew`, { years: 1 }), /outcome unknown/i);
+  await assert.rejects(client.patch(`/v1/sellerhub/domains/${D}`, {}), /outcome unknown/i);
+});
+
+test("follow-up 3: register and transfer need only the registrant contact", async () => {
+  api.reset();
+  const base = { domain: D, autoRenew: false, privacyLevel: "high", userConsent: true, registrant: CONTACT, confirm: true };
+  let r = await mcp.call("ss_domain_register", { ...base, years: 1 });
+  assert.ok(!r.isError, text(r));
+  assert.deepEqual(api.requests[0].body.contacts, { registrant: CONTACT });
+  r = await mcp.call("ss_domain_transfer", base);
+  assert.ok(!r.isError, text(r));
+  assert.deepEqual(api.requests[1].body.contacts, { registrant: CONTACT });
+});
+
+test("follow-up 4: Retry-After as an HTTP date is honoured and capped", async () => {
+  const { parseRetryAfter } = clientModule;
+  assert.equal(typeof parseRetryAfter, "function");
+  const now = Date.parse("2026-01-15T00:00:00Z");
+  assert.equal(parseRetryAfter("Thu, 15 Jan 2026 00:00:05 GMT", now), 5000);
+  assert.equal(parseRetryAfter("7", now), 7000);
+  assert.equal(parseRetryAfter("Thu, 15 Jan 2026 05:00:00 GMT", now), 30_000);
+  assert.equal(parseRetryAfter("Wed, 14 Jan 2026 00:00:00 GMT", now), 0);
+  assert.equal(parseRetryAfter("garbage", now), undefined);
+  assert.equal(parseRetryAfter(null, now), undefined);
+
+  api.reset();
+  let first = true;
+  api.handler = () => {
+    if (!first) return { body: { name: D } };
+    first = false;
+    return { status: 429, headers: { "Retry-After": new Date(Date.now() + 2000).toUTCString() }, body: { detail: "slow down" } };
+  };
+  const client = new SpaceshipClient({ apiKey: "k", apiSecret: "s", baseUrl: api.url, maxRetries: 1, cacheTtl: 0 });
+  const started = Date.now();
+  await client.get(`/v1/domains/${D}`);
+  assert.ok(Date.now() - started >= 900, "waited for the Retry-After date");
 });
