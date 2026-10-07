@@ -1,15 +1,18 @@
 import { ResponseCache } from "./cache.js";
 
-const BASE_URL = "https://spaceship.dev/api";
-const TIMEOUT_MS = 30_000;
+const DEFAULT_BASE_URL = "https://spaceship.dev/api";
+const DEFAULT_TIMEOUT_MS = 30_000;
 const FORBIDDEN_PATH = /[#]|\.\./;
+const RETRY_ON_TIMEOUT = new Set(["GET", "PUT", "DELETE"]);
+// Status reads that change on their own: never serve them from cache.
+const NO_CACHE = /^\/v1\/(async-operations\/|domains\/[^/]+\/transfer(\/|$))/;
 
 const RECOVERY_HINTS: Record<number, string> = {
   401: "Check SPACESHIP_API_KEY and SPACESHIP_API_SECRET values.",
   403: "Your API key may lack the required scope. See https://www.spaceship.com/application/api-manager/",
   404: "The resource does not exist. Verify the domain name or ID.",
   422: "The request data is invalid. Check parameter formats and constraints.",
-  429: "Rate limit exceeded. The request will be retried automatically.",
+  429: "Rate limit exceeded. Wait a minute before trying again.",
   500: "Spaceship internal error. Try again in a few seconds.",
 };
 
@@ -22,6 +25,8 @@ export interface SpaceshipConfig {
   apiSecret: string;
   cacheTtl?: number;
   maxRetries?: number;
+  baseUrl?: string;
+  timeoutMs?: number;
 }
 
 export function validatePath(path: string): void {
@@ -41,12 +46,16 @@ export class SpaceshipClient {
   private apiKey: string;
   private apiSecret: string;
   private maxRetries: number;
+  private baseUrl: string;
+  private timeoutMs: number;
   readonly cache: ResponseCache;
 
   constructor(config: SpaceshipConfig) {
     this.apiKey = config.apiKey;
     this.apiSecret = config.apiSecret;
     this.maxRetries = config.maxRetries ?? 3;
+    this.baseUrl = (config.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
+    this.timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.cache = new ResponseCache(config.cacheTtl ?? 120);
   }
 
@@ -59,13 +68,14 @@ export class SpaceshipClient {
     validatePath(path);
 
     const upperMethod = method.toUpperCase();
-    let url = `${BASE_URL}${path}`;
+    let url = `${this.baseUrl}${path}`;
     if (query && Object.keys(query).length > 0) {
       url += "?" + new URLSearchParams(query).toString();
     }
 
     const cacheKey = `${upperMethod}:${url}`;
-    if (upperMethod === "GET" && this.cache.enabled) {
+    const cacheable = upperMethod === "GET" && this.cache.enabled && !NO_CACHE.test(path);
+    if (cacheable) {
       const cached = this.cache.get<T>(cacheKey);
       if (cached !== undefined) return cached;
     }
@@ -78,95 +88,98 @@ export class SpaceshipClient {
     const bodyStr = body != null ? JSON.stringify(body) : undefined;
     if (bodyStr) headers["Content-Type"] = "application/json";
 
-    let lastError: Error | null = null;
-
-    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+    for (let attempt = 0; ; attempt++) {
+      let res: Response;
+      let text: string;
       try {
-        const res = await fetch(url, {
+        res = await fetch(url, {
           method: upperMethod,
           headers,
           body: bodyStr,
-          signal: AbortSignal.timeout(TIMEOUT_MS),
+          signal: AbortSignal.timeout(this.timeoutMs),
         });
-
-        if (res.status === 429) {
-          const retryAfter = res.headers.get("retry-after");
-          const waitMs = retryAfter
-            ? parseInt(retryAfter, 10) * 1000
-            : Math.min(1000 * 2 ** attempt, 30_000);
-
-          if (attempt < this.maxRetries) {
-            await sleep(waitMs);
-            continue;
-          }
-        }
-
-        const text = await res.text();
-
-        if (!res.ok) {
-          let detail = text.slice(0, 500);
-          try {
-            const err = JSON.parse(text) as { detail?: string; message?: string };
-            detail = (err.detail || err.message || text).slice(0, 500);
-          } catch { /* raw text */ }
-
-          const hint = RECOVERY_HINTS[res.status] || "";
-          const hintSuffix = hint ? `\nRecovery: ${hint}` : "";
-          throw new Error(
-            `Spaceship ${upperMethod} ${path} → ${res.status}: ${detail}${hintSuffix}`,
-          );
-        }
-
-        // Async operations return 202 with an operation ID header.
-        // Callers expecting this should use T = AsyncOperationResult.
-        const asyncOpId = res.headers.get("spaceship-async-operationid");
-        if (res.status === 202 && asyncOpId) {
-          return { asyncOperationId: asyncOpId } as unknown as T;
-        }
-
-        // 204 No Content or empty body — callers should handle undefined via
-        // T that includes undefined (e.g. void) or optional chaining.
-        if (res.status === 204 || !text) {
-          if (upperMethod !== "GET") this.invalidateRelated(path);
-          return undefined as unknown as T;
-        }
-
-        let parsed: T;
-        try {
-          parsed = JSON.parse(text) as T;
-        } catch {
-          throw new Error(
-            `Spaceship ${upperMethod} ${path}: expected JSON response but got: ${text.slice(0, 200)}`,
-          );
-        }
-
-        if (upperMethod === "GET" && this.cache.enabled) {
-          this.cache.set(cacheKey, parsed);
-        } else if (upperMethod !== "GET") {
-          this.invalidateRelated(path);
-        }
-
-        return parsed;
+        text = await res.text();
       } catch (err) {
-        lastError = err as Error;
-        if ((err as Error).name === "TimeoutError" && attempt < this.maxRetries) {
-          await sleep(1000 * 2 ** attempt);
-          continue;
+        if ((err as Error).name !== "TimeoutError") throw err;
+        const after = `Spaceship ${upperMethod} ${path} timed out after ${this.timeoutMs / 1000}s`;
+        // A timed-out POST/PATCH may still have been processed (registration, renewal, payment):
+        // repeating it could charge twice, so report it instead of retrying.
+        if (!RETRY_ON_TIMEOUT.has(upperMethod)) {
+          throw new Error(
+            `${after}: outcome unknown. The request may have been processed. Do not repeat it; ` +
+              "check the result first with ss_async_status, ss_domain_info or the matching read tool.",
+          );
         }
-        if (attempt >= this.maxRetries) break;
-        const msg = (err as Error).message || "";
-        if (msg.includes("429")) continue;
-        break;
+        if (attempt >= this.maxRetries) throw new Error(`${after} (${attempt + 1} attempts)`);
+        await sleep(1000 * 2 ** attempt);
+        continue;
       }
-    }
 
-    throw lastError ?? new Error(`Spaceship ${upperMethod} ${path} failed after retries`);
+      // 429 means the request was not processed, so it is safe to retry for every method.
+      if (res.status === 429 && attempt < this.maxRetries) {
+        const retryAfter = res.headers.get("retry-after");
+        const waitMs = retryAfter
+          ? parseInt(retryAfter, 10) * 1000
+          : Math.min(1000 * 2 ** attempt, 30_000);
+        await sleep(waitMs);
+        continue;
+      }
+
+      if (!res.ok) {
+        let detail = text.slice(0, 500);
+        try {
+          const err = JSON.parse(text) as {
+            detail?: string;
+            message?: string;
+            data?: { field?: string; details?: string }[];
+          };
+          detail = (err.detail || err.message || text).slice(0, 500);
+          if (Array.isArray(err.data) && err.data.length) {
+            detail += "\n" + err.data.map((d) => `- ${d.field}: ${d.details}`).join("\n");
+          }
+        } catch { /* raw text */ }
+
+        const hint = RECOVERY_HINTS[res.status] || "";
+        const hintSuffix = hint ? `\nRecovery: ${hint}` : "";
+        throw new Error(
+          `Spaceship ${upperMethod} ${path} → ${res.status}: ${detail}${hintSuffix}`,
+        );
+      }
+
+      if (upperMethod !== "GET") this.invalidateRelated(path);
+
+      // Async operations return 202 with an operation ID header.
+      // Callers expecting this should use T = AsyncOperationResult.
+      const asyncOpId = res.headers.get("spaceship-async-operationid");
+      if (res.status === 202 && asyncOpId) {
+        return { asyncOperationId: asyncOpId } as unknown as T;
+      }
+
+      // 204 No Content or empty body — callers should handle undefined via
+      // T that includes undefined (e.g. void) or optional chaining.
+      if (res.status === 204 || !text) {
+        return undefined as unknown as T;
+      }
+
+      let parsed: T;
+      try {
+        parsed = JSON.parse(text) as T;
+      } catch {
+        throw new Error(
+          `Spaceship ${upperMethod} ${path}: expected JSON response but got: ${text.slice(0, 200)}`,
+        );
+      }
+
+      if (cacheable) this.cache.set(cacheKey, parsed);
+      return parsed;
+    }
   }
 
   private invalidateRelated(path: string): void {
     const domainMatch = path.match(/^\/v1\/domains\/([^/]+)/);
     if (domainMatch) {
       this.cache.invalidate(domainMatch[1]);
+      this.cache.invalidate("/v1/domains?");
     }
     if (path.startsWith("/v1/dns/")) {
       const dnsMatch = path.match(/^\/v1\/dns\/records\/([^/?]+)/);

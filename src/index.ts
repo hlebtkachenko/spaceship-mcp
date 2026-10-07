@@ -34,6 +34,7 @@ const client = new SpaceshipClient({
   apiSecret: required("SPACESHIP_API_SECRET"),
   cacheTtl: optInt("SPACESHIP_CACHE_TTL", 120),
   maxRetries: optInt("SPACESHIP_MAX_RETRIES", 3),
+  baseUrl: process.env.SPACESHIP_BASE_URL || undefined,
 });
 
 const server = new McpServer({ name: "spaceship", version: pkg.version });
