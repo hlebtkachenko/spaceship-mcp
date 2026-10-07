@@ -1,16 +1,16 @@
 # Spaceship MCP Server
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
-![Node.js Version](https://img.shields.io/badge/node-%3E%3D20-brightgreen)
-![TypeScript](https://img.shields.io/badge/TypeScript-5-blue)
+![Node.js Version](https://img.shields.io/badge/node-%3E%3D22-brightgreen)
+![TypeScript](https://img.shields.io/badge/TypeScript-7-blue)
 
 MCP server for [Spaceship](https://www.spaceship.com) (by Namecheap) — domain registrar with DNS management, WHOIS privacy, domain transfers, and a built-in SellerHub marketplace. Manage everything from any MCP-compatible client.
 
-35 tools across 9 categories. Built-in response caching, rate limit handling with exponential backoff, and actionable error messages.
+36 tools across 8 categories. Built-in response caching, rate limit handling with exponential backoff, and actionable error messages. Tools that spend money or delete data require an explicit `confirm: true` argument.
 
 ## Requirements
 
-- Node.js 20+
+- Node.js 22+
 - Spaceship API key and secret ([API Manager](https://www.spaceship.com/application/api-manager/))
 
 ## Installation
@@ -108,7 +108,8 @@ With `SPACESHIP_API_KEY` and `SPACESHIP_API_SECRET` environment variables set.
 | `SPACESHIP_API_KEY` | Yes | — | API key from [API Manager](https://www.spaceship.com/application/api-manager/) |
 | `SPACESHIP_API_SECRET` | Yes | — | API secret from API Manager |
 | `SPACESHIP_CACHE_TTL` | No | `120` | Response cache lifetime in seconds (0 to disable) |
-| `SPACESHIP_MAX_RETRIES` | No | `3` | Max retry attempts for rate-limited (429) and timeout requests |
+| `SPACESHIP_MAX_RETRIES` | No | `3` | Max retries for rate-limited (429) requests, and for timed-out GET/PUT/DELETE requests |
+| `SPACESHIP_BASE_URL` | No | `https://spaceship.dev/api` | API base URL (tests point it at a fake server) |
 
 ## Tools
 
@@ -120,12 +121,12 @@ With `SPACESHIP_API_KEY` and `SPACESHIP_API_SECRET` environment variables set.
 | `ss_domain_info` | Get domain details (status, expiry, nameservers, privacy) |
 | `ss_domain_check` | Check single domain availability |
 | `ss_domains_check` | Bulk availability check (up to 20 domains) |
-| `ss_domain_register` | Register a domain (async) |
-| `ss_domain_renew` | Renew a domain (async) |
+| `ss_domain_register` | Register a domain (async, charges the account, needs `confirm` and `userConsent`) |
+| `ss_domain_renew` | Renew a domain (async, charges the account, needs `confirm`) |
 | `ss_domain_autorenew` | Toggle auto-renewal |
 | `ss_domain_nameservers` | Update nameservers (basic or custom) |
 | `ss_domain_contacts` | Update domain contacts |
-| `ss_domain_privacy` | Set WHOIS privacy level |
+| `ss_domain_privacy` | Set WHOIS privacy level (needs `userConsent`) |
 | `ss_domain_transfer_lock` | Lock/unlock transfers |
 | `ss_domain_email_protection` | Toggle contact form in WHOIS |
 
@@ -133,9 +134,9 @@ With `SPACESHIP_API_KEY` and `SPACESHIP_API_SECRET` environment variables set.
 
 | Tool | Description |
 |------|-------------|
-| `ss_dns_records` | List DNS records (A, AAAA, CNAME, MX, TXT, SRV, etc.) |
-| `ss_dns_save` | Add or update records (up to 500 per call) |
-| `ss_dns_delete` | Delete records by exact match |
+| `ss_dns_records` | List DNS records (A, AAAA, ALIAS, CAA, CNAME, HTTPS, MX, NS, PTR, SRV, SVCB, TLSA, TXT) |
+| `ss_dns_save` | Add or update records (up to 500 per call, per-type fields) |
+| `ss_dns_delete` | Delete records by exact match (needs `confirm`) |
 
 ### Contacts (4 tools)
 
@@ -143,17 +144,17 @@ With `SPACESHIP_API_KEY` and `SPACESHIP_API_SECRET` environment variables set.
 |------|-------------|
 | `ss_contact_save` | Create/update contact, returns contact ID |
 | `ss_contact_get` | Read contact details by ID |
-| `ss_contact_attr_save` | Save TLD-specific contact attributes (e.g. .ca) |
+| `ss_contact_attr_save` | Save TLD-specific contact attributes (.ca, .us) |
 | `ss_contact_attr_get` | Read contact attributes by ID |
 
 ### Transfers (4 tools)
 
 | Tool | Description |
 |------|-------------|
-| `ss_domain_transfer` | Initiate inbound domain transfer (async) |
+| `ss_domain_transfer` | Initiate inbound domain transfer (async, charges the account, needs `confirm` and `userConsent`) |
 | `ss_domain_transfer_details` | Check transfer status |
-| `ss_domain_auth_code` | Get EPP/auth code for outbound transfers |
-| `ss_domain_restore` | Restore a deleted/expired domain (async) |
+| `ss_domain_auth_code` | Get EPP/auth code for outbound transfers (the code lands in the transcript) |
+| `ss_domain_restore` | Restore a deleted/expired domain (async, charges the account, needs `confirm`) |
 
 ### Personal Nameservers (4 tools)
 
@@ -162,7 +163,7 @@ With `SPACESHIP_API_KEY` and `SPACESHIP_API_SECRET` environment variables set.
 | `ss_personal_ns_list` | List vanity/glue nameservers for a domain |
 | `ss_personal_ns_get` | Get IPs for a specific nameserver host |
 | `ss_personal_ns_update` | Create or update a personal nameserver |
-| `ss_personal_ns_delete` | Delete a personal nameserver |
+| `ss_personal_ns_delete` | Delete a personal nameserver (needs `confirm`) |
 
 ### SellerHub (7 tools)
 
@@ -172,7 +173,7 @@ With `SPACESHIP_API_KEY` and `SPACESHIP_API_SECRET` environment variables set.
 | `ss_sellerhub_get` | Get listing details |
 | `ss_sellerhub_create` | List a domain for sale |
 | `ss_sellerhub_update` | Update listing (price, description) |
-| `ss_sellerhub_delete` | Remove from SellerHub |
+| `ss_sellerhub_delete` | Remove from SellerHub (needs `confirm`) |
 | `ss_sellerhub_checkout` | Create Buy Now checkout link |
 | `ss_sellerhub_verify` | Get DNS verification records |
 
@@ -190,48 +191,43 @@ With `SPACESHIP_API_KEY` and `SPACESHIP_API_SECRET` environment variables set.
 
 ## Async Operations
 
-Domain registration, renewal, transfer, and restoration are asynchronous. These tools return an `asyncOperationId` — use `ss_async_status` to poll for completion. Statuses: `pending`, `success`, `failed`.
+Domain registration, renewal, transfer, and restoration are asynchronous. These tools return an `asyncOperationId`: use `ss_async_status` to poll for completion. Statuses: `pending`, `success`, `failed` (returned as an error).
+
+## Safety
+
+- Every tool carries MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`).
+- `ss_domain_register`, `ss_domain_renew`, `ss_domain_transfer`, `ss_domain_restore` (spend money) and `ss_dns_delete`, `ss_personal_ns_delete`, `ss_sellerhub_delete` (delete) require `confirm: true`.
+- `userConsent` for WHOIS privacy is a required parameter, never assumed.
 
 ## Response Caching
 
-GET responses are cached for 120 seconds by default (configurable via `SPACESHIP_CACHE_TTL`). Write operations automatically invalidate related cache entries. Set `SPACESHIP_CACHE_TTL=0` to disable caching entirely.
+GET responses are cached for 120 seconds by default (configurable via `SPACESHIP_CACHE_TTL`). Async operation and transfer status are never cached. Write operations invalidate the related domain, DNS, contact or SellerHub entries and the domain list. Set `SPACESHIP_CACHE_TTL=0` to disable caching entirely.
 
-## Rate Limit Handling
+## Rate Limits and Timeouts
 
-When Spaceship returns HTTP 429, the client automatically retries with exponential backoff, respecting the `Retry-After` header when present. Default: up to 3 retries. Timeout errors are also retried.
+When Spaceship returns HTTP 429, the client retries with exponential backoff, respecting the `Retry-After` header when present. Default: up to 3 retries. Timed-out GET, PUT and DELETE requests are retried too. A timed-out POST or PATCH (registration, renewal, transfer, restore, SellerHub) is never retried: the tool returns an "outcome unknown" error so you can check with `ss_async_status` or `ss_domain_info` before trying again. Other HTTP errors are not retried.
 
 ## Security
 
 - 30-second timeout on all HTTP requests
-- Path injection prevention (rejects `..`, `#`)
-- Automatic retry with backoff for rate limits and timeouts
-- Error responses truncated to 500 characters
+- Path parameters are URL-encoded; API paths containing `..` or `#` are rejected
+- Error responses truncated to 500 characters, with the API's per-field validation details
 - Context-aware recovery hints in error messages
-- JSON parsing wrapped in try/catch
 - All parameters validated with Zod schemas
 - No credentials stored on disk (env vars only)
 
-## Architecture
+## Development
 
+```bash
+npm test                 # build + node:test suite against a fake Spaceship API
+npm run check:contract   # validate every tool's request against the Spaceship OpenAPI spec
 ```
-src/
-  index.ts               Entry point, env validation, config
-  spaceship-client.ts    API client (key + secret headers, retry, caching)
-  cache.ts               TTL-based response cache with write invalidation
-  tools/
-    domains.ts           Domain management + email protection (12 tools)
-    dns.ts               DNS records (3 tools)
-    contacts.ts          Contact management + TLD attributes (4 tools)
-    transfer.ts          Transfers and restore (4 tools)
-    nameservers.ts       Personal nameservers (4 tools)
-    sellerhub.ts         Marketplace (7 tools)
-    analysis.ts          DNS alignment check (1 tool)
-    async.ts             Async operation polling (1 tool)
-```
+
+Layout and design notes: [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Tech Stack
 
-- TypeScript, ESM
+- TypeScript 7, ESM
 - `@modelcontextprotocol/sdk` (stdio transport)
 - Zod (schema validation)
 - Native `fetch` with `AbortSignal.timeout`
