@@ -38,6 +38,16 @@ export function validatePath(path: string): void {
   }
 }
 
+const MAX_WAIT_MS = 30_000;
+
+/** Retry-After in ms (delta-seconds or HTTP date), capped at 30 s; undefined if absent or unparsable. */
+export function parseRetryAfter(value: string | null, now = Date.now()): number | undefined {
+  if (!value) return undefined;
+  const ms = /^\d+$/.test(value.trim()) ? Number(value) * 1000 : Date.parse(value) - now;
+  if (Number.isNaN(ms)) return undefined;
+  return Math.min(Math.max(ms, 0), MAX_WAIT_MS);
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -100,16 +110,19 @@ export class SpaceshipClient {
         });
         text = await res.text();
       } catch (err) {
-        if ((err as Error).name !== "TimeoutError") throw err;
-        const after = `Spaceship ${upperMethod} ${path} timed out after ${this.timeoutMs / 1000}s`;
-        // A timed-out POST/PATCH may still have been processed (registration, renewal, payment):
-        // repeating it could charge twice, so report it instead of retrying.
+        const timedOut = (err as Error).name === "TimeoutError";
+        const after = timedOut
+          ? `Spaceship ${upperMethod} ${path} timed out after ${this.timeoutMs / 1000}s`
+          : `Spaceship ${upperMethod} ${path} failed: ${(err as Error).message}`;
+        // A POST/PATCH that timed out or lost its connection may still have been processed
+        // (registration, renewal, payment): repeating it could charge twice, so report it instead.
         if (!RETRY_ON_TIMEOUT.has(upperMethod)) {
           throw new Error(
             `${after}: outcome unknown. The request may have been processed. Do not repeat it; ` +
               "check the result first with ss_async_status, ss_domain_info or the matching read tool.",
           );
         }
+        if (!timedOut) throw err;
         if (attempt >= this.maxRetries) throw new Error(`${after} (${attempt + 1} attempts)`);
         await sleep(1000 * 2 ** attempt);
         continue;
@@ -117,10 +130,8 @@ export class SpaceshipClient {
 
       // 429 means the request was not processed, so it is safe to retry for every method.
       if (res.status === 429 && attempt < this.maxRetries) {
-        const retryAfter = res.headers.get("retry-after");
-        const waitMs = retryAfter
-          ? parseInt(retryAfter, 10) * 1000
-          : Math.min(1000 * 2 ** attempt, 30_000);
+        const waitMs =
+          parseRetryAfter(res.headers.get("retry-after")) ?? Math.min(1000 * 2 ** attempt, MAX_WAIT_MS);
         await sleep(waitMs);
         continue;
       }
