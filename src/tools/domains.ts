@@ -198,7 +198,7 @@ export function registerDomainTools(server: McpServer, ss: SpaceshipClient) {
     {
       domain: z.string().min(4).describe("Domain to renew"),
       years: z.number().int().min(1).max(10).describe("Renewal years"),
-      currentExpirationDate: z.string().describe("Current expiration date (ISO 8601 date-time, from ss_domain_info)"),
+      currentExpirationDate: z.string().describe("Current expiration date as ISO 8601 date-time, e.g. 2027-01-15T00:00:00Z"),
       confirm: CONFIRM,
     },
     { destructiveHint: true, idempotentHint: false },

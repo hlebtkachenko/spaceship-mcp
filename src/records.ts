@@ -20,7 +20,7 @@ const TYPES = {
   CAA: {
     flag: z.union([z.literal(0), z.literal(128)]).describe("0, or 128 for the critical bit"),
     tag: z.enum(["issue", "issuewild", "iodef"]),
-    value: z.string().max(256).describe('CA identifier, e.g. "letsencrypt.org"'),
+    value: z.string().max(256).describe('CA identifier, e.g. "ca.example.net"'),
   },
   CNAME: { cname: host("Canonical hostname") },
   HTTPS: { ...svcb, scheme: z.literal("_https").optional().describe('Required when port is set: "_https"') },
