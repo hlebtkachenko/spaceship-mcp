@@ -15,9 +15,12 @@
 - Async operation and transfer status are no longer cached; domain writes (including async 202 responses) invalidate the domain list.
 - API validation errors include the per-field details.
 - A `failed` async operation is returned as an error.
+- A POST/PATCH that loses its connection also returns "outcome unknown" instead of a raw network error.
+- `Retry-After` given as an HTTP date is honoured (capped at 30 s) instead of retrying at once.
+- `ss_domain_info` shows the full expiration date-time that `ss_domain_renew` needs.
 
 ### Added
-- `attributes` (contact attribute IDs) on `ss_domain_register` and `ss_domain_transfer`.
+- `attributes` (contact attribute IDs) on `ss_domain_register` and `ss_domain_transfer`; `admin`, `tech` and `billing` are optional there, as in the API.
 - MCP annotations on every tool.
 - `SPACESHIP_BASE_URL` env var, node:test suite, `npm run check:contract`.
 - Requires Node 22+; MCP SDK 1.32, zod 4, TypeScript 7.

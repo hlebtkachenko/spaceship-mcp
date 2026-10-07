@@ -205,7 +205,7 @@ GET responses are cached for 120 seconds by default (configurable via `SPACESHIP
 
 ## Rate Limits and Timeouts
 
-When Spaceship returns HTTP 429, the client retries with exponential backoff, respecting the `Retry-After` header when present. Default: up to 3 retries. Timed-out GET, PUT and DELETE requests are retried too. A timed-out POST or PATCH (registration, renewal, transfer, restore, SellerHub) is never retried: the tool returns an "outcome unknown" error so you can check with `ss_async_status` or `ss_domain_info` before trying again. Other HTTP errors are not retried.
+When Spaceship returns HTTP 429, the client retries with exponential backoff, respecting the `Retry-After` header (seconds or HTTP date, capped at 30 s) when present. Default: up to 3 retries. Timed-out GET, PUT and DELETE requests are retried too. A POST or PATCH (registration, renewal, transfer, restore, SellerHub) that times out or loses its connection is never retried: the tool returns an "outcome unknown" error so you can check with `ss_async_status` or `ss_domain_info` before trying again. Other HTTP errors are not retried.
 
 ## Security
 
@@ -220,7 +220,7 @@ When Spaceship returns HTTP 429, the client retries with exponential backoff, re
 
 ```bash
 npm test                 # build + node:test suite against a fake Spaceship API
-npm run check:contract   # validate every tool's request against the Spaceship OpenAPI spec
+npm run check:contract   # validate every tool's request and the fake API's responses against the Spaceship OpenAPI spec
 ```
 
 Layout and design notes: [ARCHITECTURE.md](ARCHITECTURE.md).
