@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { SpaceshipClient } from "../spaceship-client.js";
-import { textResult, errorResult } from "../utils.js";
+import { textResult, errorResult, CONFIRM } from "../utils.js";
 
 interface PersonalNs {
   host: string;
@@ -13,6 +13,7 @@ export function registerNameserverTools(server: McpServer, ss: SpaceshipClient) 
     "ss_personal_ns_list",
     "List personal (vanity/glue) nameservers for a domain",
     { domain: z.string().min(4).describe("Domain name") },
+    { readOnlyHint: true },
     async ({ domain }) => {
       try {
         const data = await ss.get<{ records: PersonalNs[] }>(
@@ -39,6 +40,7 @@ export function registerNameserverTools(server: McpServer, ss: SpaceshipClient) 
       domain: z.string().min(4).describe("Domain name"),
       host: z.string().min(1).describe("Host name (e.g. ns1)"),
     },
+    { readOnlyHint: true },
     async ({ domain, host }) => {
       try {
         const data = await ss.get<{ ips: string[] }>(
@@ -60,6 +62,7 @@ export function registerNameserverTools(server: McpServer, ss: SpaceshipClient) 
       host: z.string().min(1).describe("New host name (same as current to keep)"),
       ips: z.array(z.string()).min(1).max(16).describe("IP addresses for this nameserver"),
     },
+    { destructiveHint: true, idempotentHint: true },
     async ({ domain, currentHost, host, ips }) => {
       try {
         await ss.put(
@@ -79,7 +82,9 @@ export function registerNameserverTools(server: McpServer, ss: SpaceshipClient) 
     {
       domain: z.string().min(4).describe("Domain name"),
       host: z.string().min(1).describe("Host name to delete (e.g. ns1)"),
+      confirm: CONFIRM,
     },
+    { destructiveHint: true, idempotentHint: true },
     async ({ domain, host }) => {
       try {
         await ss.del(

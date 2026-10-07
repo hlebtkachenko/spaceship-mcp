@@ -1,7 +1,10 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { SpaceshipClient } from "../spaceship-client.js";
-import { textResult, errorResult } from "../utils.js";
+import { textResult, errorResult, CONFIRM } from "../utils.js";
+
+const AMOUNT = z.string().max(20).regex(/^[0-9]+(\.[0-9]{1,2})?$/);
+const CURRENCY = z.literal("USD").default("USD").describe("Currency (the API accepts USD only)");
 
 interface Price {
   amount: string;
@@ -37,6 +40,7 @@ export function registerSellerHubTools(server: McpServer, ss: SpaceshipClient) {
       take: z.number().int().min(1).max(100).default(50).describe("Items per page"),
       skip: z.number().int().min(0).default(0).describe("Items to skip"),
     },
+    { readOnlyHint: true },
     async ({ take, skip }) => {
       try {
         const data = await ss.get<SellerList>("/v1/sellerhub/domains", {
@@ -67,6 +71,7 @@ export function registerSellerHubTools(server: McpServer, ss: SpaceshipClient) {
     "ss_sellerhub_get",
     "Get details for a specific SellerHub listing",
     { domain: z.string().min(4).describe("Domain name") },
+    { readOnlyHint: true },
     async ({ domain }) => {
       try {
         const d = await ss.get<SellerDomain>(`/v1/sellerhub/domains/${encodeURIComponent(domain)}`);
@@ -92,12 +97,13 @@ export function registerSellerHubTools(server: McpServer, ss: SpaceshipClient) {
       displayName: z.string().optional().describe("Display name"),
       description: z.string().max(5000).optional().describe("Domain description"),
       binPriceEnabled: z.boolean().optional().describe("Enable Buy It Now"),
-      binAmount: z.string().optional().describe("BIN price amount (e.g. '999.99')"),
-      binCurrency: z.string().default("USD").describe("BIN price currency"),
+      binAmount: AMOUNT.optional().describe("BIN price amount (e.g. '999.99')"),
+      binCurrency: CURRENCY,
       minPriceEnabled: z.boolean().optional().describe("Enable minimum offer"),
-      minAmount: z.string().optional().describe("Min offer amount"),
-      minCurrency: z.string().default("USD").describe("Min offer currency"),
+      minAmount: AMOUNT.optional().describe("Min offer amount"),
+      minCurrency: CURRENCY,
     },
+    { destructiveHint: false, idempotentHint: false },
     async ({ name, displayName, description, binPriceEnabled, binAmount, binCurrency, minPriceEnabled, minAmount, minCurrency }) => {
       try {
         const body: Record<string, unknown> = { name };
@@ -118,18 +124,19 @@ export function registerSellerHubTools(server: McpServer, ss: SpaceshipClient) {
 
   server.tool(
     "ss_sellerhub_update",
-    "Update a SellerHub listing",
+    "Update a SellerHub listing (overwrites the listed prices)",
     {
       domain: z.string().min(4).describe("Domain name"),
       displayName: z.string().optional().describe("Display name"),
       description: z.string().max(5000).optional().describe("Description"),
       binPriceEnabled: z.boolean().optional().describe("Enable Buy It Now"),
-      binAmount: z.string().optional().describe("BIN price amount"),
-      binCurrency: z.string().default("USD").describe("BIN price currency"),
+      binAmount: AMOUNT.optional().describe("BIN price amount"),
+      binCurrency: CURRENCY,
       minPriceEnabled: z.boolean().optional().describe("Enable minimum offer"),
-      minAmount: z.string().optional().describe("Min offer amount"),
-      minCurrency: z.string().default("USD").describe("Min offer currency"),
+      minAmount: AMOUNT.optional().describe("Min offer amount"),
+      minCurrency: CURRENCY,
     },
+    { destructiveHint: true, idempotentHint: true },
     async ({ domain, displayName, description, binPriceEnabled, binAmount, binCurrency, minPriceEnabled, minAmount, minCurrency }) => {
       try {
         const body: Record<string, unknown> = {};
@@ -151,7 +158,8 @@ export function registerSellerHubTools(server: McpServer, ss: SpaceshipClient) {
   server.tool(
     "ss_sellerhub_delete",
     "Remove a domain from SellerHub",
-    { domain: z.string().min(4).describe("Domain to remove") },
+    { domain: z.string().min(4).describe("Domain to remove"), confirm: CONFIRM },
+    { destructiveHint: true, idempotentHint: true },
     async ({ domain }) => {
       try {
         await ss.del(`/v1/sellerhub/domains/${encodeURIComponent(domain)}`);
@@ -167,9 +175,10 @@ export function registerSellerHubTools(server: McpServer, ss: SpaceshipClient) {
     "Create a Buy Now checkout link for a SellerHub domain",
     {
       domain: z.string().min(4).describe("Domain name (must be listed in SellerHub)"),
-      amount: z.string().optional().describe("Override price amount"),
-      currency: z.string().default("USD").describe("Price currency"),
+      amount: AMOUNT.optional().describe("Override price amount"),
+      currency: CURRENCY,
     },
+    { destructiveHint: false, idempotentHint: false },
     async ({ domain, amount, currency }) => {
       try {
         const body: Record<string, unknown> = {
@@ -193,6 +202,7 @@ export function registerSellerHubTools(server: McpServer, ss: SpaceshipClient) {
     "ss_sellerhub_verify",
     "Get DNS verification records for SellerHub domain ownership",
     {},
+    { readOnlyHint: true },
     async () => {
       try {
         const data = await ss.get<{

@@ -18,6 +18,7 @@ export function registerAsyncTools(server: McpServer, ss: SpaceshipClient) {
     {
       operationId: z.string().max(36).describe("Operation ID from the async response header"),
     },
+    { readOnlyHint: true },
     async ({ operationId }) => {
       try {
         const op = await ss.get<AsyncOperation>(
@@ -33,7 +34,7 @@ export function registerAsyncTools(server: McpServer, ss: SpaceshipClient) {
         if (op.details && Object.keys(op.details).length) {
           lines.push(`- Details: ${JSON.stringify(op.details)}`);
         }
-        return textResult(lines.join("\n"));
+        return op.status === "failed" ? errorResult(lines.join("\n")) : textResult(lines.join("\n"));
       } catch (err) {
         return errorResult((err as Error).message);
       }

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { SpaceshipClient } from "../spaceship-client.js";
-import { textResult, errorResult } from "../utils.js";
+import { textResult, errorResult, CONFIRM } from "../utils.js";
 
 interface DomainItem {
   name: string;
@@ -39,6 +39,7 @@ export function registerDomainTools(server: McpServer, ss: SpaceshipClient) {
       take: z.number().int().min(1).max(100).default(50).describe("Items per page (1-100)"),
       skip: z.number().int().min(0).default(0).describe("Items to skip"),
     },
+    { readOnlyHint: true },
     async ({ take, skip }) => {
       try {
         const data = await ss.get<DomainList>("/v1/domains", {
@@ -73,6 +74,7 @@ export function registerDomainTools(server: McpServer, ss: SpaceshipClient) {
     "ss_domain_info",
     "Get detailed info for a specific domain",
     { domain: z.string().min(4).describe("Domain name (e.g. example.com)") },
+    { readOnlyHint: true },
     async ({ domain }) => {
       try {
         const d = await ss.get<DomainItem>(`/v1/domains/${encodeURIComponent(domain)}`);
@@ -101,6 +103,7 @@ export function registerDomainTools(server: McpServer, ss: SpaceshipClient) {
     "ss_domain_check",
     "Check if a single domain is available for registration",
     { domain: z.string().min(4).describe("Domain to check (e.g. example.com)") },
+    { readOnlyHint: true },
     async ({ domain }) => {
       try {
         const data = await ss.get<AvailabilityResult>(
@@ -125,6 +128,7 @@ export function registerDomainTools(server: McpServer, ss: SpaceshipClient) {
     {
       domains: z.array(z.string().min(4)).min(1).max(20).describe("Domains to check"),
     },
+    { readOnlyHint: true },
     async ({ domains }) => {
       try {
         const data = await ss.post<{ domains: AvailabilityResult[] }>(
@@ -148,26 +152,32 @@ export function registerDomainTools(server: McpServer, ss: SpaceshipClient) {
 
   server.tool(
     "ss_domain_register",
-    "Register a domain (async operation — use ss_async_status to track)",
+    "Register a domain. CHARGES the account's default payment method. Async operation: track it with ss_async_status. Ask the user to approve the purchase first.",
     {
       domain: z.string().min(4).describe("Domain to register"),
       years: z.number().int().min(1).max(10).describe("Registration years"),
       autoRenew: z.boolean().describe("Enable auto-renewal"),
       privacyLevel: z.enum(["public", "high"]).default("high").describe("WHOIS privacy level"),
+      userConsent: z.boolean().describe(
+        'User consent to the privacy setting. Must be true when privacyLevel is "public" (the user agrees to publish their contact details in WHOIS). Ask the user; do not assume.',
+      ),
       registrant: z.string().describe("Registrant contact ID"),
       admin: z.string().describe("Admin contact ID"),
       tech: z.string().describe("Tech contact ID"),
       billing: z.string().describe("Billing contact ID"),
+      attributes: z.array(z.string().min(27).max(32)).max(5).optional().describe("Contact attribute IDs from ss_contact_attr_save (TLDs such as .us and .ca need them)"),
+      confirm: CONFIRM,
     },
-    async ({ domain, years, autoRenew, privacyLevel, registrant, admin, tech, billing }) => {
+    { destructiveHint: true, idempotentHint: false },
+    async ({ domain, years, autoRenew, privacyLevel, userConsent, registrant, admin, tech, billing, attributes }) => {
       try {
         const result = await ss.post<{ asyncOperationId?: string }>(
           `/v1/domains/${encodeURIComponent(domain)}`,
           {
             autoRenew,
             years,
-            privacyProtection: { level: privacyLevel, userConsent: true },
-            contacts: { registrant, admin, tech, billing },
+            privacyProtection: { level: privacyLevel, userConsent },
+            contacts: { registrant, admin, tech, billing, ...(attributes?.length ? { attributes } : {}) },
           },
         );
         const opId = result?.asyncOperationId;
@@ -184,12 +194,14 @@ export function registerDomainTools(server: McpServer, ss: SpaceshipClient) {
 
   server.tool(
     "ss_domain_renew",
-    "Renew a domain (async operation)",
+    "Renew a domain. CHARGES the account's default payment method. Async operation: track it with ss_async_status. Ask the user to approve the purchase first.",
     {
       domain: z.string().min(4).describe("Domain to renew"),
       years: z.number().int().min(1).max(10).describe("Renewal years"),
-      currentExpirationDate: z.string().describe("Current expiration date (ISO format)"),
+      currentExpirationDate: z.string().describe("Current expiration date (ISO 8601 date-time, from ss_domain_info)"),
+      confirm: CONFIRM,
     },
+    { destructiveHint: true, idempotentHint: false },
     async ({ domain, years, currentExpirationDate }) => {
       try {
         const result = await ss.post<{ asyncOperationId?: string }>(
@@ -215,6 +227,7 @@ export function registerDomainTools(server: McpServer, ss: SpaceshipClient) {
       domain: z.string().min(4).describe("Domain name"),
       enabled: z.boolean().describe("true to enable, false to disable"),
     },
+    { destructiveHint: true, idempotentHint: true },
     async ({ domain, enabled }) => {
       try {
         await ss.put(`/v1/domains/${encodeURIComponent(domain)}/autorenew`, {
@@ -229,12 +242,13 @@ export function registerDomainTools(server: McpServer, ss: SpaceshipClient) {
 
   server.tool(
     "ss_domain_nameservers",
-    "Update nameservers for a domain",
+    "Replace the nameservers of a domain. Wrong nameservers take the domain's website and email offline.",
     {
       domain: z.string().min(4).describe("Domain name"),
       provider: z.enum(["basic", "custom"]).describe('"basic" for Spaceship NS, "custom" for your own'),
       hosts: z.array(z.string()).min(2).max(12).optional().describe("Nameserver hostnames (required for custom)"),
     },
+    { destructiveHint: true, idempotentHint: true },
     async ({ domain, provider, hosts }) => {
       try {
         const body: Record<string, unknown> = { provider };
@@ -257,6 +271,7 @@ export function registerDomainTools(server: McpServer, ss: SpaceshipClient) {
       tech: z.string().optional().describe("Tech contact ID"),
       billing: z.string().optional().describe("Billing contact ID"),
     },
+    { destructiveHint: true, idempotentHint: true },
     async ({ domain, registrant, admin, tech, billing }) => {
       try {
         const body: Record<string, string> = { registrant };
@@ -277,12 +292,16 @@ export function registerDomainTools(server: McpServer, ss: SpaceshipClient) {
     {
       domain: z.string().min(4).describe("Domain name"),
       level: z.enum(["public", "high"]).describe("Privacy level"),
+      userConsent: z.boolean().describe(
+        "User consent to the privacy change. The API applies the change only if this is true. Ask the user; do not assume.",
+      ),
     },
-    async ({ domain, level }) => {
+    { destructiveHint: true, idempotentHint: true },
+    async ({ domain, level, userConsent }) => {
       try {
         await ss.put(`/v1/domains/${encodeURIComponent(domain)}/privacy/preference`, {
           privacyLevel: level,
-          userConsent: true,
+          userConsent,
         });
         return textResult(`Privacy set to "${level}" for ${domain}.`);
       } catch (err) {
@@ -293,11 +312,12 @@ export function registerDomainTools(server: McpServer, ss: SpaceshipClient) {
 
   server.tool(
     "ss_domain_transfer_lock",
-    "Lock or unlock domain transfers",
+    "Lock or unlock domain transfers. Unlocking lets the domain be transferred away to another registrar.",
     {
       domain: z.string().min(4).describe("Domain name"),
       locked: z.boolean().describe("true to lock, false to unlock"),
     },
+    { destructiveHint: true, idempotentHint: true },
     async ({ domain, locked }) => {
       try {
         await ss.put(`/v1/domains/${encodeURIComponent(domain)}/transfer/lock`, {
@@ -319,6 +339,7 @@ export function registerDomainExtraTools(server: McpServer, ss: SpaceshipClient)
       domain: z.string().min(4).describe("Domain name"),
       contactForm: z.boolean().describe("true to show contact form, false to hide"),
     },
+    { destructiveHint: true, idempotentHint: true },
     async ({ domain, contactForm }) => {
       try {
         await ss.put(

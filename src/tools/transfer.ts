@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { SpaceshipClient } from "../spaceship-client.js";
-import { textResult, errorResult } from "../utils.js";
+import { textResult, errorResult, CONFIRM } from "../utils.js";
 
 interface TransferDetails {
   startedAt?: string;
@@ -13,23 +13,29 @@ interface TransferDetails {
 export function registerTransferTools(server: McpServer, ss: SpaceshipClient) {
   server.tool(
     "ss_domain_transfer",
-    "Initiate a domain transfer into Spaceship (async operation)",
+    "Transfer a domain into Spaceship. CHARGES the account's default payment method. Async operation: track it with ss_async_status. Ask the user to approve the purchase first.",
     {
       domain: z.string().min(4).describe("Domain to transfer"),
       autoRenew: z.boolean().describe("Enable auto-renewal after transfer"),
       privacyLevel: z.enum(["public", "high"]).default("high").describe("Privacy level"),
+      userConsent: z.boolean().describe(
+        'User consent to the privacy setting. Must be true when privacyLevel is "public" (the user agrees to publish their contact details in WHOIS). Ask the user; do not assume.',
+      ),
       registrant: z.string().describe("Registrant contact ID"),
       admin: z.string().describe("Admin contact ID"),
       tech: z.string().describe("Tech contact ID"),
       billing: z.string().describe("Billing contact ID"),
-      authCode: z.string().optional().describe("EPP/auth code (required for most TLDs)"),
+      attributes: z.array(z.string().min(27).max(32)).max(5).optional().describe("Contact attribute IDs from ss_contact_attr_save (TLDs such as .us and .ca need them)"),
+      authCode: z.string().min(1).max(50).optional().describe("EPP/auth code (required for most TLDs)"),
+      confirm: CONFIRM,
     },
-    async ({ domain, autoRenew, privacyLevel, registrant, admin, tech, billing, authCode }) => {
+    { destructiveHint: true, idempotentHint: false },
+    async ({ domain, autoRenew, privacyLevel, userConsent, registrant, admin, tech, billing, attributes, authCode }) => {
       try {
         const body: Record<string, unknown> = {
           autoRenew,
-          privacyProtection: { level: privacyLevel, userConsent: true },
-          contacts: { registrant, admin, tech, billing },
+          privacyProtection: { level: privacyLevel, userConsent },
+          contacts: { registrant, admin, tech, billing, ...(attributes?.length ? { attributes } : {}) },
         };
         if (authCode) body.authCode = authCode;
 
@@ -53,6 +59,7 @@ export function registerTransferTools(server: McpServer, ss: SpaceshipClient) {
     "ss_domain_transfer_details",
     "Get the status of an ongoing domain transfer",
     { domain: z.string().min(4).describe("Domain name") },
+    { readOnlyHint: true },
     async ({ domain }) => {
       try {
         const t = await ss.get<TransferDetails>(
@@ -74,8 +81,9 @@ export function registerTransferTools(server: McpServer, ss: SpaceshipClient) {
 
   server.tool(
     "ss_domain_auth_code",
-    "Get the EPP/auth code for a domain (needed for outbound transfers)",
+    "Get the EPP/auth code for a domain (needed for outbound transfers). The code is returned in the conversation transcript, so anyone with the transcript can use it to transfer the domain away.",
     { domain: z.string().min(4).describe("Domain name") },
+    { readOnlyHint: true },
     async ({ domain }) => {
       try {
         const data = await ss.get<{ authCode: string; expires: string }>(
@@ -90,8 +98,9 @@ export function registerTransferTools(server: McpServer, ss: SpaceshipClient) {
 
   server.tool(
     "ss_domain_restore",
-    "Restore a deleted/expired domain (async operation)",
-    { domain: z.string().min(4).describe("Domain to restore") },
+    "Restore a deleted/expired domain. CHARGES the account's default payment method (redemption fee). Async operation: track it with ss_async_status. Ask the user to approve the purchase first.",
+    { domain: z.string().min(4).describe("Domain to restore"), confirm: CONFIRM },
+    { destructiveHint: true, idempotentHint: false },
     async ({ domain }) => {
       try {
         const result = await ss.post<{ asyncOperationId?: string }>(
