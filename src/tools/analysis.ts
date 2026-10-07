@@ -3,27 +3,30 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { SpaceshipClient } from "../spaceship-client.js";
 import type { DnsRecord, DnsRecordList } from "../types.js";
 import { textResult, errorResult } from "../utils.js";
+import { recordValue, ownerName } from "../records.js";
 
 function recordKey(type: string, name: string, value: string): string {
   return `${type}:${name}:${value}`.toLowerCase();
 }
 
-function recordValue(r: DnsRecord): string {
-  return (r.address || r.value || r.target || "").toLowerCase();
-}
 
 export function registerAnalysisTools(server: McpServer, ss: SpaceshipClient) {
   server.tool(
     "ss_dns_alignment",
-    "Compare expected DNS records against actual records to detect missing or unexpected entries",
+    "Compare expected DNS records against actual records to detect missing or unexpected entries. " +
+      'Values use zone-file order: A/AAAA "192.0.2.1", CNAME/ALIAS/NS/PTR "host.example.com", TXT "v=spf1 -all", ' +
+      'MX "10 mail.example.com", SRV "priority weight port target", CAA "0 issue ca.example.net", ' +
+      'HTTPS/SVCB "svcPriority targetName svcParams", TLSA "usage selector matching data". ' +
+      'SRV/TLSA names include their prefix, e.g. "_sip._tcp.@".',
     {
       domain: z.string().min(4).describe("Domain name"),
       expected: z.array(z.object({
         type: z.string().describe("Record type (A, CNAME, MX, TXT, etc.)"),
         name: z.string().describe("Record name (@ for apex)"),
-        value: z.string().describe("Expected value"),
+        value: z.string().describe("Expected value, in the format given in the tool description"),
       })).min(1).describe("Expected DNS records"),
     },
+    { readOnlyHint: true },
     async ({ domain, expected }) => {
       try {
         let allRecords: DnsRecord[] = [];
@@ -38,11 +41,12 @@ export function registerAnalysisTools(server: McpServer, ss: SpaceshipClient) {
           if (!page?.items?.length) break;
           allRecords = allRecords.concat(page.items);
           if (allRecords.length >= page.total) break;
-          skip += take;
+          // The API returns at most 100 items per page whatever `take` is.
+          skip += page.items.length;
         }
 
         const actualKeys = new Set(
-          allRecords.map((r) => recordKey(r.type, r.name, recordValue(r))),
+          allRecords.map((r) => recordKey(r.type, ownerName(r), recordValue(r))),
         );
         const expectedKeys = new Set(
           expected.map((r) => recordKey(r.type, r.name, r.value)),
@@ -54,9 +58,10 @@ export function registerAnalysisTools(server: McpServer, ss: SpaceshipClient) {
         const unexpected = allRecords.filter(
           (r) => {
             const val = recordValue(r);
+            const name = ownerName(r);
             for (const e of expected) {
-              if (e.type.toLowerCase() === r.type.toLowerCase() && e.name.toLowerCase() === r.name.toLowerCase()) {
-                if (!expectedKeys.has(recordKey(r.type, r.name, val))) return true;
+              if (e.type.toLowerCase() === r.type.toLowerCase() && e.name.toLowerCase() === name.toLowerCase()) {
+                if (!expectedKeys.has(recordKey(r.type, name, val))) return true;
                 return false;
               }
             }
@@ -84,7 +89,7 @@ export function registerAnalysisTools(server: McpServer, ss: SpaceshipClient) {
         if (unexpected.length) {
           lines.push(`## Unexpected (${unexpected.length})`);
           for (const r of unexpected) {
-            lines.push(`- ${r.type} ${r.name} → ${recordValue(r)}`);
+            lines.push(`- ${r.type} ${ownerName(r)} → ${recordValue(r)}`);
           }
           lines.push("");
         }

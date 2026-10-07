@@ -2,32 +2,24 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { SpaceshipClient } from "../spaceship-client.js";
 import type { DnsRecord, DnsRecordList } from "../types.js";
-import { textResult, errorResult } from "../utils.js";
-
-const RECORD_TYPE = z.enum([
-  "A", "AAAA", "ALIAS", "CAA", "CNAME", "HTTPS", "MX", "NS", "PTR", "SRV", "SVCB", "TLSA", "TXT",
-]);
+import { textResult, errorResult, CONFIRM } from "../utils.js";
+import { saveRecordSchema, deleteRecordSchema, recordValue, ownerName } from "../records.js";
 
 function fmtRecord(r: DnsRecord): string {
-  const val = r.address || r.value || r.target || "";
-  const extra: string[] = [];
-  if (r.ttl != null) extra.push(`ttl=${r.ttl}`);
-  if (r.priority != null) extra.push(`prio=${r.priority}`);
-  if (r.weight != null) extra.push(`weight=${r.weight}`);
-  if (r.port != null) extra.push(`port=${r.port}`);
-  const suffix = extra.length ? ` (${extra.join(", ")})` : "";
-  return `- **${r.type}** ${r.name} → ${val}${suffix}`;
+  const ttl = r.ttl != null ? ` (ttl=${r.ttl})` : "";
+  return `- **${r.type}** ${ownerName(r)} → ${recordValue(r)}${ttl}`;
 }
 
 export function registerDnsTools(server: McpServer, ss: SpaceshipClient) {
   server.tool(
     "ss_dns_records",
-    "List DNS records for a domain (paginated)",
+    "List DNS records for a domain (paginated; the API returns at most 100 records per page)",
     {
       domain: z.string().min(4).describe("Domain name"),
       take: z.number().int().min(1).max(500).default(100).describe("Items per page"),
       skip: z.number().int().min(0).default(0).describe("Items to skip"),
     },
+    { readOnlyHint: true },
     async ({ domain, take, skip }) => {
       try {
         const data = await ss.get<DnsRecordList>(
@@ -41,8 +33,9 @@ export function registerDnsTools(server: McpServer, ss: SpaceshipClient) {
 
         const lines = [`# DNS Records for ${domain} (${data.items.length} of ${data.total})`, ""];
         for (const r of data.items) lines.push(fmtRecord(r));
-        if (data.total > skip + take) {
-          lines.push("", `Use skip=${skip + take} to see more.`);
+        const next = skip + data.items.length;
+        if (data.total > next) {
+          lines.push("", `Use skip=${next} to see more.`);
         }
         return textResult(lines.join("\n"));
       } catch (err) {
@@ -53,18 +46,13 @@ export function registerDnsTools(server: McpServer, ss: SpaceshipClient) {
 
   server.tool(
     "ss_dns_save",
-    "Add or update DNS records for a domain (up to 500 records per call)",
+    "Add or update DNS records for a domain (up to 500 records per call). Each record carries the fields of its type: A/AAAA address, CNAME cname, MX exchange+preference, TXT value, ALIAS aliasName, NS nameserver, PTR pointer, CAA flag+tag+value, SRV service+protocol+priority+weight+port+target, HTTPS/SVCB svcPriority+targetName+svcParams, TLSA port+protocol+usage+selector+matching+associationData.",
     {
       domain: z.string().min(4).describe("Domain name"),
-      records: z.array(z.object({
-        type: RECORD_TYPE.describe("Record type"),
-        name: z.string().describe("Record name (@ for apex, www, mail, etc.)"),
-        address: z.string().describe("Record value (IP, hostname, text)"),
-        ttl: z.number().int().min(60).default(3600).describe("TTL in seconds"),
-        priority: z.number().int().optional().describe("Priority (MX, SRV)"),
-      })).min(1).max(500).describe("Records to save"),
-      force: z.boolean().default(false).describe("Force update (skip conflict check)"),
+      records: z.array(saveRecordSchema).min(1).max(500).describe("Records to save"),
+      force: z.boolean().default(false).describe("Overwrite conflicting records (e.g. replace an existing CNAME)"),
     },
+    { destructiveHint: true, idempotentHint: true },
     async ({ domain, records, force }) => {
       try {
         await ss.put(`/v1/dns/records/${encodeURIComponent(domain)}`, {
@@ -80,15 +68,13 @@ export function registerDnsTools(server: McpServer, ss: SpaceshipClient) {
 
   server.tool(
     "ss_dns_delete",
-    "Delete DNS records from a domain",
+    "Delete DNS records from a domain. Each record must match an existing one exactly, with the same per-type fields as ss_dns_save (no ttl).",
     {
       domain: z.string().min(4).describe("Domain name"),
-      records: z.array(z.object({
-        type: RECORD_TYPE.describe("Record type"),
-        name: z.string().describe("Record name"),
-        address: z.string().describe("Record value to match"),
-      })).min(1).max(500).describe("Records to delete (must match exactly)"),
+      records: z.array(deleteRecordSchema).min(1).max(500).describe("Records to delete (must match exactly)"),
+      confirm: CONFIRM,
     },
+    { destructiveHint: true, idempotentHint: true },
     async ({ domain, records }) => {
       try {
         await ss.del(`/v1/dns/records/${encodeURIComponent(domain)}`, records);
