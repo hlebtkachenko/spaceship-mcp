@@ -82,7 +82,7 @@ export function registerDomainTools(server: McpServer, ss: SpaceshipClient) {
           `# ${d.unicodeName || d.name}`,
           `- Status: ${d.lifecycleStatus || "unknown"}`,
           `- Registered: ${fmtDate(d.registrationDate)}`,
-          `- Expires: ${fmtDate(d.expirationDate)}`,
+          `- Expires: ${d.expirationDate || "n/a"}`,
           `- Auto-renew: ${d.autoRenew}`,
           `- Verification: ${d.verificationStatus || "n/a"}`,
         ];
@@ -162,9 +162,9 @@ export function registerDomainTools(server: McpServer, ss: SpaceshipClient) {
         'User consent to the privacy setting. Must be true when privacyLevel is "public" (the user agrees to publish their contact details in WHOIS). Ask the user; do not assume.',
       ),
       registrant: z.string().describe("Registrant contact ID"),
-      admin: z.string().describe("Admin contact ID"),
-      tech: z.string().describe("Tech contact ID"),
-      billing: z.string().describe("Billing contact ID"),
+      admin: z.string().optional().describe("Admin contact ID"),
+      tech: z.string().optional().describe("Tech contact ID"),
+      billing: z.string().optional().describe("Billing contact ID"),
       attributes: z.array(z.string().min(27).max(32)).max(5).optional().describe("Contact attribute IDs from ss_contact_attr_save (TLDs such as .us and .ca need them)"),
       confirm: CONFIRM,
     },
@@ -177,7 +177,7 @@ export function registerDomainTools(server: McpServer, ss: SpaceshipClient) {
             autoRenew,
             years,
             privacyProtection: { level: privacyLevel, userConsent },
-            contacts: { registrant, admin, tech, billing, ...(attributes?.length ? { attributes } : {}) },
+            contacts: { registrant, ...(admin && { admin }), ...(tech && { tech }), ...(billing && { billing }), ...(attributes?.length ? { attributes } : {}) },
           },
         );
         const opId = result?.asyncOperationId;
